@@ -66,10 +66,31 @@ target_link_libraries(aeris-demo-project PRIVATE
 target_compile_features(aeris-demo-project PRIVATE cxx_std_17)
 set_target_properties(aeris-demo-project PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-render-probe
+    dev/render_project.cpp
+    src/map_view.cpp
+    src/map_view.hpp
+    src/map_view_model.cpp
+    src/project_model.cpp
+    src/project_model.hpp
+    src/scene_controller.hpp
+)
+target_link_libraries(aeris-desktop-render-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Widgets
+)
+target_compile_features(aeris-desktop-render-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-render-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 if(MSVC)
     target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
