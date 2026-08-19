@@ -40,5 +40,27 @@ jobs:
           -DAERIS_CORE_SOURCE_DIR=${{ github.workspace }}/aeris-core
           -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
-        run: cmake --build build --target aeris-desktop --parallel 2
+      - name: Build desktop and fixture tool
+        run: >-
+          cmake --build build
+          --target aeris-desktop aeris-demo-project
+          --parallel 2
+
+      - name: Fetch exact pinned demo sources
+        run: >-
+          cmake
+          -DDESTINATION=${{ runner.temp }}/natural-earth-v5.1.2
+          -P aeris-core/scripts/fetch_demo_world.cmake
+
+      - name: Build a real durable demo project
+        run: >-
+          ./build/aeris-demo-project
+          ${{ runner.temp }}/natural-earth-v5.1.2
+          ${{ runner.temp }}/desktop-demo.aeris
+
+      - name: Prove demo project exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ${{ runner.temp }}/desktop-demo.aeris
+          ls -lh ${{ runner.temp }}/desktop-demo.aeris
