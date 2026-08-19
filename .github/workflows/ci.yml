@@ -40,10 +40,10 @@ jobs:
           -DAERIS_CORE_SOURCE_DIR=${{ github.workspace }}/aeris-core
           -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build desktop and fixture tool
+      - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-demo-project
+          --target aeris-desktop aeris-demo-project aeris-desktop-render-probe
           --parallel 2
 
       - name: Fetch exact pinned demo sources
@@ -58,9 +58,32 @@ jobs:
           ${{ runner.temp }}/natural-earth-v5.1.2
           ${{ runner.temp }}/desktop-demo.aeris
 
-      - name: Prove demo project exists
+      - name: Remove acquisition sources
+        shell: bash
+        run: rm -rf ${{ runner.temp }}/natural-earth-v5.1.2
+
+      - name: Render desktop from aeris only
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build/aeris-desktop-render-probe
+          ${{ runner.temp }}/desktop-demo.aeris
+          ${{ runner.temp }}/desktop-demo.png
+
+      - name: Prove durable project and render exist
         shell: bash
         run: |
           set -euo pipefail
           test -s ${{ runner.temp }}/desktop-demo.aeris
-          ls -lh ${{ runner.temp }}/desktop-demo.aeris
+          test -s ${{ runner.temp }}/desktop-demo.png
+          ls -lh ${{ runner.temp }}/desktop-demo.aeris ${{ runner.temp }}/desktop-demo.png
+
+      - name: Upload desktop proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeris-desktop-proof
+          path: |
+            ${{ runner.temp }}/desktop-demo.aeris
+            ${{ runner.temp }}/desktop-demo.png
+          if-no-files-found: error
+          retention-days: 14
