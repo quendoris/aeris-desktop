@@ -114,6 +114,10 @@ void SceneController::request(const view::SceneRequest& request) {
 
 void SceneController::cancel() {
     if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
+    // A one-thread pool can otherwise accumulate obsolete mouse-move previews
+    // behind the currently running generation. They are already stale before
+    // they start, so discard them and let only the newest request queue next.
+    pool_.clear();
     ++generation_;
 }
 
