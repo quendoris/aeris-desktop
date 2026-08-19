@@ -3,6 +3,8 @@
 #pragma once
 
 #include "aeris/storage/project.hpp"
+#include "project_model.hpp"
+#include "scene_controller.hpp"
 
 #include <QMainWindow>
 
@@ -12,6 +14,9 @@ class QAction;
 class QComboBox;
 class QDockWidget;
 class QLabel;
+class QPushButton;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 namespace aeris::desktop {
 
@@ -29,12 +34,19 @@ private:
     void open_project();
     void close_project();
     void refresh_project_ui();
+    bool load_render_model();
+    void rebuild_layer_tree();
+    void set_layer_visibility(QTreeWidgetItem* item);
+    void apply_selected_projection();
 
     MapView* map_view_{nullptr};
     QDockWidget* unfold_dock_{nullptr};
     QDockWidget* layers_dock_{nullptr};
     QDockWidget* inspector_dock_{nullptr};
     QComboBox* projection_combo_{nullptr};
+    QPushButton* apply_projection_button_{nullptr};
+    QPushButton* return_globe_button_{nullptr};
+    QTreeWidget* layer_tree_{nullptr};
     QLabel* project_path_value_{nullptr};
     QLabel* project_uuid_value_{nullptr};
     QLabel* project_revision_value_{nullptr};
@@ -44,6 +56,9 @@ private:
     QAction* close_project_action_{nullptr};
 
     std::unique_ptr<aeris::storage::ProjectStore> project_;
+    std::shared_ptr<const ProjectModel> model_;
+    SceneController scene_controller_;
+    bool rebuilding_layers_{false};
 };
 
 }  // namespace aeris::desktop
