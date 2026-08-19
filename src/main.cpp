@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "main_window.hpp"
+#include "map_canvas.hpp"
 #include "scene_builder.hpp"
 #include "scene_presentation.hpp"
 #include "unfold.hpp"
 #include "world_loader.hpp"
+
+#include "aeris/geo/wgs84.hpp"
+#include "aeris/projection/wgs84.hpp"
 
 #include <QApplication>
 #include <QDateTime>
@@ -14,8 +18,11 @@
 #include <QPainter>
 #include <QTimer>
 
+#include <array>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 
 namespace {
@@ -26,13 +33,39 @@ struct Arguments final {
     std::filesystem::path render_path;
     std::filesystem::path render_political_path;
     std::filesystem::path render_unfold_path;
+    std::filesystem::path render_audit_path;
     bool smoke = false;
     bool render = false;
     bool render_political = false;
     bool render_unfold = false;
+    bool render_audit = false;
     bool help = false;
     bool valid = true;
 };
+
+struct AuditCase final {
+    const char* filename;
+    aeris::viewer::MapContent content;
+    aeris::viewer::ViewMode mode;
+    double longitude_deg;
+    double latitude_deg;
+    double zoom;
+};
+
+constexpr std::array<AuditCase, 12> kAuditCases{{
+    {"political-globe-world-1x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::globe, 15.0, 20.0, 1.0},
+    {"political-globe-europe-2x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::globe, 15.0, 50.0, 2.0},
+    {"political-globe-balkans-4x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::globe, 21.0, 43.0, 4.0},
+    {"political-globe-benelux-8x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::globe, 4.7, 51.2, 8.0},
+    {"political-mollweide-world-1x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::mollweide, 15.0, 20.0, 1.0},
+    {"political-mollweide-europe-2x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::mollweide, 15.0, 50.0, 2.0},
+    {"political-mollweide-balkans-4x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::mollweide, 21.0, 43.0, 4.0},
+    {"political-mollweide-benelux-8x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::mollweide, 4.7, 51.2, 8.0},
+    {"political-sinusoidal-world-1x.png", aeris::viewer::MapContent::political, aeris::viewer::ViewMode::sinusoidal, 15.0, 20.0, 1.0},
+    {"physical-mollweide-indonesia-4x.png", aeris::viewer::MapContent::physical, aeris::viewer::ViewMode::mollweide, 118.0, -2.0, 4.0},
+    {"physical-mollweide-antimeridian-4x.png", aeris::viewer::MapContent::physical, aeris::viewer::ViewMode::mollweide, 178.0, 60.0, 4.0},
+    {"physical-mollweide-antarctica-2x.png", aeris::viewer::MapContent::physical, aeris::viewer::ViewMode::mollweide, 0.0, -82.0, 2.0},
+}};
 
 [[nodiscard]] Arguments parse_arguments(const int argc, char** argv) {
     Arguments arguments{};
@@ -67,6 +100,13 @@ struct Arguments final {
             }
             arguments.render_unfold = true;
             arguments.render_unfold_path = argv[++index];
+        } else if (value == "--render-audit") {
+            if (index + 1 >= argc) {
+                arguments.valid = false;
+                return arguments;
+            }
+            arguments.render_audit = true;
+            arguments.render_audit_path = argv[++index];
         } else if (value == "--help" || value == "-h") {
             arguments.help = true;
         } else {
@@ -78,7 +118,8 @@ struct Arguments final {
         static_cast<int>(arguments.smoke) +
         static_cast<int>(arguments.render) +
         static_cast<int>(arguments.render_political) +
-        static_cast<int>(arguments.render_unfold);
+        static_cast<int>(arguments.render_unfold) +
+        static_cast<int>(arguments.render_audit);
     if (exclusive_modes > 1) arguments.valid = false;
     return arguments;
 }
@@ -86,7 +127,8 @@ struct Arguments final {
 void print_usage() {
     std::cout
         << "usage: aeris_viewer [--snapshot <directory>] "
-           "[--smoke | --render <png> | --render-political <png> | --render-unfold <png>]\n"
+           "[--smoke | --render <png> | --render-political <png> | "
+           "--render-unfold <png> | --render-audit <directory>]\n"
         << "\n"
         << "The default snapshot directory is dev-data/natural-earth-v5.1.2.\n"
         << "Fetch the exact pinned physical + political demo bytes with:\n"
@@ -163,6 +205,104 @@ void print_usage() {
     return save_window_png(window, application, output_path);
 }
 
+[[nodiscard]] std::optional<aeris::geometry::PlanarPoint> project_audit_center(
+    const AuditCase& audit
+) {
+    if (audit.mode == aeris::viewer::ViewMode::globe) return std::nullopt;
+    const auto primitive = audit.mode == aeris::viewer::ViewMode::sinusoidal
+        ? aeris::projection::EqualAreaPrimitive::sinusoidal
+        : aeris::projection::EqualAreaPrimitive::mollweide;
+    const auto projected = aeris::projection::project_wgs84_primitive(
+        audit.longitude_deg * aeris::geo::kPi / 180.0,
+        audit.latitude_deg * aeris::geo::kPi / 180.0,
+        primitive,
+        0.0
+    );
+    if (!projected.ok()) return std::nullopt;
+    return projected.value;
+}
+
+[[nodiscard]] bool render_audit_case(
+    QApplication& application,
+    const aeris::viewer::WorkbenchWorlds& worlds,
+    const AuditCase& audit,
+    const std::filesystem::path& output_path
+) {
+    const auto world = worlds.select(audit.content);
+    aeris::viewer::SceneRequest request{};
+    request.mode = audit.mode;
+    request.quality = aeris::viewer::SceneQuality::verified;
+    request.camera_longitude_deg = audit.longitude_deg;
+    request.camera_latitude_deg = audit.latitude_deg;
+
+    aeris::viewer::SceneData scene = aeris::viewer::build_scene(*world, request);
+    aeris::viewer::apply_source_presentation(scene, *world);
+    if (!scene.ok || scene.canceled) {
+        std::cerr << "viewer audit scene failed for " << audit.filename
+                  << ": " << scene.diagnostic << '\n';
+        return false;
+    }
+
+    const auto flat_center = project_audit_center(audit);
+    if (audit.mode != aeris::viewer::ViewMode::globe && !flat_center.has_value()) {
+        std::cerr << "viewer audit could not project center for " << audit.filename << '\n';
+        return false;
+    }
+
+    aeris::viewer::MainWindow window(
+        worlds.physical, worlds.political, audit.content, false
+    );
+    window.present_scene(std::move(scene));
+    window.resize(1280, 820);
+    window.show();
+    application.processEvents();
+
+    auto* canvas = static_cast<aeris::viewer::MapCanvas*>(window.centralWidget());
+    canvas->set_viewport(audit.zoom, flat_center);
+    application.processEvents();
+    return save_window_png(window, application, output_path);
+}
+
+[[nodiscard]] bool render_visual_audit(
+    QApplication& application,
+    const aeris::viewer::WorkbenchWorlds& worlds,
+    const std::filesystem::path& output_directory
+) {
+    std::error_code directory_error{};
+    std::filesystem::create_directories(output_directory, directory_error);
+    if (directory_error) {
+        std::cerr << "unable to create visual audit directory: "
+                  << directory_error.message() << '\n';
+        return false;
+    }
+
+    std::ofstream manifest(output_directory / "manifest.tsv", std::ios::trunc);
+    if (!manifest) {
+        std::cerr << "unable to create visual audit manifest\n";
+        return false;
+    }
+    manifest << "filename\tcontent\tmode\tzoom\tlongitude_deg\tlatitude_deg\n";
+
+    for (const AuditCase& audit : kAuditCases) {
+        const std::filesystem::path output_path = output_directory / audit.filename;
+        if (!render_audit_case(application, worlds, audit, output_path)) return false;
+        manifest
+            << audit.filename << '\t'
+            << (audit.content == aeris::viewer::MapContent::political ? "political" : "physical") << '\t'
+            << aeris::viewer::view_mode_name(audit.mode) << '\t'
+            << audit.zoom << '\t'
+            << audit.longitude_deg << '\t'
+            << audit.latitude_deg << '\n';
+    }
+
+    manifest.flush();
+    if (!manifest) {
+        std::cerr << "unable to finalize visual audit manifest\n";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -193,7 +333,8 @@ int main(int argc, char** argv) {
             .arg(QString::fromStdString(arguments.snapshot.string()))
             .arg(QString::fromStdString(worlds.diagnostic));
         if (arguments.smoke || arguments.render ||
-            arguments.render_political || arguments.render_unfold) {
+            arguments.render_political || arguments.render_unfold ||
+            arguments.render_audit) {
             std::cerr << message.toStdString() << '\n';
         } else {
             QMessageBox::critical(nullptr, QStringLiteral("AERIS source verification"), message);
@@ -231,6 +372,16 @@ int main(int argc, char** argv) {
         }
         std::cout << "viewer_unfold_render: PASS "
                   << arguments.render_unfold_path.string() << '\n';
+        return EXIT_SUCCESS;
+    }
+
+    if (arguments.render_audit) {
+        if (!render_visual_audit(application, worlds, arguments.render_audit_path)) {
+            std::cerr << "unable to render visual audit\n";
+            return EXIT_FAILURE;
+        }
+        std::cout << "viewer_visual_audit: PASS "
+                  << arguments.render_audit_path.string() << '\n';
         return EXIT_SUCCESS;
     }
 

@@ -8,6 +8,7 @@
 #include "unfold.hpp"
 
 #include <QPoint>
+#include <QPointF>
 #include <QWidget>
 
 #include <functional>
@@ -24,6 +25,7 @@ public:
     void set_layer_render_state(LayerRenderState state);
     void set_camera_callback(CameraCallback callback);
     void set_camera(double longitude_deg, double latitude_deg);
+    void set_viewport(double zoom, std::optional<geometry::PlanarPoint> flat_center = std::nullopt);
     void begin_unfold(UnfoldBundle bundle);
     void set_unfold_progress(double progress);
     [[nodiscard]] const SceneData& finish_unfold();
@@ -50,6 +52,8 @@ private:
     double longitude_deg_ = 15.0;
     double latitude_deg_ = 20.0;
     double zoom_ = 1.0;
+    QPointF flat_pan_px_{};
+    std::optional<ViewMode> flat_pan_mode_;
     CameraCallback camera_callback_;
 };
 
