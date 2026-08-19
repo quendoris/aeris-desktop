@@ -32,6 +32,9 @@ public:
         std::shared_ptr<const ProjectModel> model,
         std::string project_uuid,
         std::uint64_t revision);
+    void set_project_model(
+        std::shared_ptr<const ProjectModel> model,
+        std::uint64_t revision);
     void clear_project();
 
     void set_scene_request_callback(SceneRequestCallback callback);
