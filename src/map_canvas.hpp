@@ -8,6 +8,7 @@
 #include "unfold.hpp"
 
 #include <QPoint>
+#include <QPointF>
 #include <QWidget>
 
 #include <functional>
@@ -50,6 +51,7 @@ private:
     double longitude_deg_ = 15.0;
     double latitude_deg_ = 20.0;
     double zoom_ = 1.0;
+    QPointF flat_pan_px_{};
     CameraCallback camera_callback_;
 };
 
