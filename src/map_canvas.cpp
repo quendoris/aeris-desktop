@@ -7,6 +7,7 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QTransform>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -22,6 +23,16 @@ namespace {
     return value - 180.0;
 }
 
+void apply_device_pan(QPainter& painter, const QPointF& pan_px) {
+    QTransform transform = painter.worldTransform();
+    transform.setMatrix(
+        transform.m11(), transform.m12(), transform.m13(),
+        transform.m21(), transform.m22(), transform.m23(),
+        transform.m31() + pan_px.x(), transform.m32() + pan_px.y(), transform.m33()
+    );
+    painter.setWorldTransform(transform);
+}
+
 }  // namespace
 
 MapCanvas::MapCanvas(QWidget* parent)
@@ -32,6 +43,13 @@ MapCanvas::MapCanvas(QWidget* parent)
 }
 
 void MapCanvas::set_scene(SceneData scene) {
+    const ViewMode previous_mode = scene_.mode;
+    if (previous_mode != ViewMode::globe &&
+        scene.mode != ViewMode::globe &&
+        previous_mode != scene.mode) {
+        flat_pan_px_ = {};
+    }
+
     unfold_.reset();
     unfold_progress_ = 0.0;
     scene_ = std::move(scene);
@@ -53,6 +71,7 @@ void MapCanvas::set_camera(const double longitude_deg, const double latitude_deg
 void MapCanvas::begin_unfold(UnfoldBundle bundle) {
     longitude_deg_ = bundle.globe_endpoint.camera_longitude_deg;
     latitude_deg_ = bundle.globe_endpoint.camera_latitude_deg;
+    flat_pan_px_ = {};
     unfold_progress_ = 0.0;
     unfold_ = std::move(bundle);
     update();
@@ -121,6 +140,7 @@ void MapCanvas::paintEvent(QPaintEvent*) {
     }
 
     apply_world_transform(painter, scene_bounds(scene_), width(), height(), zoom_);
+    if (scene_.mode != ViewMode::globe) apply_device_pan(painter, flat_pan_px_);
     draw_scene_geometry(painter, scene_, 1.0, layer_render_state_);
 
     painter.resetTransform();
@@ -155,7 +175,7 @@ void MapCanvas::paintEvent(QPaintEvent*) {
 }
 
 void MapCanvas::mousePressEvent(QMouseEvent* event) {
-    if (unfold_ || scene_.mode != ViewMode::globe || event->button() != Qt::LeftButton) {
+    if (unfold_ || event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
         return;
     }
@@ -166,15 +186,21 @@ void MapCanvas::mousePressEvent(QMouseEvent* event) {
 }
 
 void MapCanvas::mouseMoveEvent(QMouseEvent* event) {
-    if (unfold_ || !dragging_ || scene_.mode != ViewMode::globe) {
+    if (unfold_ || !dragging_) {
         QWidget::mouseMoveEvent(event);
         return;
     }
+
     const QPoint delta = event->pos() - last_mouse_;
     last_mouse_ = event->pos();
-    longitude_deg_ = wrap_longitude(longitude_deg_ - static_cast<double>(delta.x()) * 0.35);
-    latitude_deg_ = std::clamp(latitude_deg_ + static_cast<double>(delta.y()) * 0.35, -89.5, 89.5);
-    emit_camera(false);
+    if (scene_.mode == ViewMode::globe) {
+        longitude_deg_ = wrap_longitude(longitude_deg_ - static_cast<double>(delta.x()) * 0.35);
+        latitude_deg_ = std::clamp(latitude_deg_ + static_cast<double>(delta.y()) * 0.35, -89.5, 89.5);
+        emit_camera(false);
+    } else {
+        flat_pan_px_ += QPointF(delta);
+        update();
+    }
     event->accept();
 }
 
@@ -185,13 +211,29 @@ void MapCanvas::mouseReleaseEvent(QMouseEvent* event) {
     }
     dragging_ = false;
     unsetCursor();
-    emit_camera(true);
+    if (scene_.mode == ViewMode::globe) emit_camera(true);
     event->accept();
 }
 
 void MapCanvas::wheelEvent(QWheelEvent* event) {
-    const double factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
-    zoom_ = std::clamp(zoom_ * factor, 0.55, 8.0);
+    const int wheel_delta = event->angleDelta().y();
+    if (wheel_delta == 0) {
+        QWidget::wheelEvent(event);
+        return;
+    }
+
+    const double factor = wheel_delta > 0 ? 1.12 : 1.0 / 1.12;
+    const double next_zoom = std::clamp(zoom_ * factor, 0.55, 8.0);
+    if (scene_.mode != ViewMode::globe && next_zoom != zoom_) {
+        const double ratio = next_zoom / zoom_;
+        const QPointF viewport_center(
+            0.5 * static_cast<double>(width()),
+            0.5 * static_cast<double>(height())
+        );
+        const QPointF cursor_offset = event->position() - viewport_center;
+        flat_pan_px_ = cursor_offset - ratio * (cursor_offset - flat_pan_px_);
+    }
+    zoom_ = next_zoom;
     update();
     event->accept();
 }
