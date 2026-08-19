@@ -5,6 +5,7 @@
 #include <QPoint>
 #include <QWidget>
 
+#include <cstdint>
 #include <string>
 
 namespace aeris::desktop {
