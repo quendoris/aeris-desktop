@@ -43,11 +43,11 @@ MapCanvas::MapCanvas(QWidget* parent)
 }
 
 void MapCanvas::set_scene(SceneData scene) {
-    const ViewMode previous_mode = scene_.mode;
-    if (previous_mode != ViewMode::globe &&
-        scene.mode != ViewMode::globe &&
-        previous_mode != scene.mode) {
-        flat_pan_px_ = {};
+    if (scene.mode != ViewMode::globe) {
+        if (!flat_pan_mode_.has_value() || *flat_pan_mode_ != scene.mode) {
+            flat_pan_px_ = {};
+        }
+        flat_pan_mode_ = scene.mode;
     }
 
     unfold_.reset();
@@ -87,6 +87,7 @@ const SceneData& MapCanvas::finish_unfold() {
         scene_ = std::move(unfold_->flat_endpoint);
         longitude_deg_ = scene_.camera_longitude_deg;
         latitude_deg_ = scene_.camera_latitude_deg;
+        flat_pan_mode_ = scene_.mode;
         unfold_.reset();
         unfold_progress_ = 0.0;
         update();
