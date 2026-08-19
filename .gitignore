@@ -1,0 +1,9 @@
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+.dev/
+dev-data/
+*.user
+.DS_Store
+Thumbs.db
