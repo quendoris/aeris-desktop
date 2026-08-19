@@ -39,6 +39,23 @@ FetchContent_MakeAvailable(aeris_core)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
 
+function(aeris_desktop_target target_name)
+    target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_features(${target_name} PRIVATE cxx_std_17)
+    set_target_properties(${target_name} PROPERTIES CXX_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /W4 /permissive-)
+        if(AERIS_DESKTOP_WARNINGS_AS_ERRORS)
+            target_compile_options(${target_name} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+        if(AERIS_DESKTOP_WARNINGS_AS_ERRORS)
+            target_compile_options(${target_name} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
 add_executable(aeris_viewer
     src/main.cpp
     src/main_window.cpp
@@ -52,24 +69,38 @@ add_executable(aeris_viewer
     src/unfold_controller.cpp
     src/world_loader.cpp
 )
-
-target_include_directories(aeris_viewer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(aeris_viewer PRIVATE AERIS::core Qt6::Widgets)
-target_compile_features(aeris_viewer PRIVATE cxx_std_17)
+aeris_desktop_target(aeris_viewer)
 set_target_properties(aeris_viewer PROPERTIES
-    CXX_EXTENSIONS OFF
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
 )
 
-if(MSVC)
-    target_compile_options(aeris_viewer PRIVATE /W4 /permissive-)
-    if(AERIS_DESKTOP_WARNINGS_AS_ERRORS)
-        target_compile_options(aeris_viewer PRIVATE /WX)
-    endif()
-else()
-    target_compile_options(aeris_viewer PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
-    if(AERIS_DESKTOP_WARNINGS_AS_ERRORS)
-        target_compile_options(aeris_viewer PRIVATE -Werror)
-    endif()
-endif()
+add_executable(aeris_viewer_scene_probe
+    tests/scene_probe.cpp
+    src/scene_builder.cpp
+    src/scene_presentation.cpp
+    src/unfold.cpp
+    src/world_loader.cpp
+)
+target_link_libraries(aeris_viewer_scene_probe PRIVATE AERIS::core)
+aeris_desktop_target(aeris_viewer_scene_probe)
+
+add_executable(aeris_viewer_controller_probe
+    tests/controller_probe.cpp
+    src/scene_builder.cpp
+    src/scene_controller.cpp
+    src/scene_presentation.cpp
+    src/unfold.cpp
+    src/unfold_controller.cpp
+    src/world_loader.cpp
+)
+target_link_libraries(aeris_viewer_controller_probe PRIVATE AERIS::core Qt6::Core)
+aeris_desktop_target(aeris_viewer_controller_probe)
+
+add_executable(aeris_viewer_layer_stack_probe
+    tests/layer_stack_probe.cpp
+    src/layer_stack.cpp
+)
+target_link_libraries(aeris_viewer_layer_stack_probe PRIVATE AERIS::core)
+aeris_desktop_target(aeris_viewer_layer_stack_probe)
