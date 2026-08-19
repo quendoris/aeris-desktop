@@ -52,6 +52,7 @@ private:
     double latitude_deg_ = 20.0;
     double zoom_ = 1.0;
     QPointF flat_pan_px_{};
+    std::optional<ViewMode> flat_pan_mode_;
     CameraCallback camera_callback_;
 };
 
