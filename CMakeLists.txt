@@ -73,7 +73,6 @@ add_executable(aeris-desktop-render-probe
     src/map_view_model.cpp
     src/project_model.cpp
     src/project_model.hpp
-    src/scene_controller.hpp
 )
 target_link_libraries(aeris-desktop-render-probe PRIVATE
     AERIS::core
