@@ -57,8 +57,19 @@ set_target_properties(aeris-desktop PROPERTIES
     MACOSX_BUNDLE ON
 )
 
+add_executable(aeris-demo-project dev/make_demo_project.cpp)
+target_link_libraries(aeris-demo-project PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+)
+target_compile_features(aeris-demo-project PRIVATE cxx_std_17)
+set_target_properties(aeris-demo-project PROPERTIES CXX_EXTENSIONS OFF)
+
 if(MSVC)
     target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
