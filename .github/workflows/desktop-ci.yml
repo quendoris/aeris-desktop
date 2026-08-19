@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: 2026 quendoris
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Desktop CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-desktop:
+    name: Ubuntu / Qt6 desktop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout desktop
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Qt6 Widgets development package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-base-dev
+
+      - name: Fetch exact pinned demo worlds
+        run: >-
+          cmake
+          -DDESTINATION=${{ runner.temp }}/natural-earth-v5.1.2
+          -P scripts/fetch_demo_world.cmake
+
+      - name: Configure standalone desktop against pinned AERIS core
+        run: >-
+          cmake -S . -B build-desktop
+          -DAERIS_DESKTOP_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build desktop and probes
+        run: >-
+          cmake --build build-desktop
+          --target aeris_viewer aeris_viewer_scene_probe aeris_viewer_controller_probe aeris_viewer_layer_stack_probe
+          --parallel 2
+
+      - name: Verify layer-stack role and visibility semantics
+        run: ./build-desktop/aeris_viewer_layer_stack_probe
+
+      - name: Build all real desktop scenes and unfold endpoints
+        run: >-
+          ./build-desktop/aeris_viewer_scene_probe
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+
+      - name: Verify scene and unfold stale-result ownership
+        run: >-
+          ./build-desktop/aeris_viewer_controller_probe
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+
+      - name: Offscreen startup smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build-desktop/aeris_viewer
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+          --smoke
+
+      - name: Render verified physical workbench screenshot
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build-desktop/aeris_viewer
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+          --render ${{ runner.temp }}/aeris-viewer-globe.png
+
+      - name: Render verified political workbench screenshot
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build-desktop/aeris_viewer
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+          --render-political ${{ runner.temp }}/aeris-viewer-political.png
+
+      - name: Render non-normative unfold midpoint screenshot
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build-desktop/aeris_viewer
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+          --render-unfold ${{ runner.temp }}/aeris-viewer-unfold.png
+
+      - name: Upload desktop screenshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeris-desktop-screenshots
+          path: |
+            ${{ runner.temp }}/aeris-viewer-globe.png
+            ${{ runner.temp }}/aeris-viewer-political.png
+            ${{ runner.temp }}/aeris-viewer-unfold.png
+          if-no-files-found: error
+          retention-days: 14
