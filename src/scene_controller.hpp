@@ -41,9 +41,11 @@ public:
     void request(const view::SceneRequest& request);
     void cancel();
 
-private:
+    // Public only as the queued delivery boundary used by the private worker.
+    // Callers should request scenes through request().
     void accept_frame(std::uint64_t generation, RenderFrame frame);
 
+private:
     std::shared_ptr<const ProjectModel> model_;
     QThreadPool pool_;
     FrameCallback frame_callback_;
