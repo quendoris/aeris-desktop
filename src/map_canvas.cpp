@@ -24,6 +24,10 @@ namespace {
 }
 
 void apply_device_pan(QPainter& painter, const QPointF& pan_px) {
+    // Pan is desktop viewport state measured in device-independent pixels, not
+    // projected-world distance. Adjusting the affine dx/dy terms directly keeps
+    // a 20 px drag equal to 20 px at every zoom; applying painter.translate()
+    // through the already-scaled world transform would make pan scale-dependent.
     QTransform transform = painter.worldTransform();
     transform.setMatrix(
         transform.m11(), transform.m12(), transform.m13(),
@@ -232,6 +236,9 @@ void MapCanvas::wheelEvent(QWheelEvent* event) {
             0.5 * static_cast<double>(height())
         );
         const QPointF cursor_offset = event->position() - viewport_center;
+        // Before zoom: screen = center + world_offset + pan. Scaling the world
+        // offset by ratio and choosing this new pan makes the same world point
+        // remain exactly under the cursor instead of drifting toward the center.
         flat_pan_px_ = cursor_offset - ratio * (cursor_offset - flat_pan_px_);
     }
     zoom_ = next_zoom;
