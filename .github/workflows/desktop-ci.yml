@@ -90,6 +90,14 @@ jobs:
           --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
           --render-unfold ${{ runner.temp }}/aeris-viewer-unfold.png
 
+      - name: Render deterministic scale and region visual audit
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build-desktop/aeris_viewer
+          --snapshot ${{ runner.temp }}/natural-earth-v5.1.2
+          --render-audit ${{ runner.temp }}/aeris-visual-audit
+
       - name: Upload desktop screenshots
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -98,5 +106,6 @@ jobs:
             ${{ runner.temp }}/aeris-viewer-globe.png
             ${{ runner.temp }}/aeris-viewer-political.png
             ${{ runner.temp }}/aeris-viewer-unfold.png
+            ${{ runner.temp }}/aeris-visual-audit/
           if-no-files-found: error
           retention-days: 14
