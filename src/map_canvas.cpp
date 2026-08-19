@@ -5,6 +5,7 @@
 
 #include "render_surface.hpp"
 
+#include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTransform>
@@ -69,6 +70,40 @@ void MapCanvas::set_camera_callback(CameraCallback callback) { camera_callback_ 
 void MapCanvas::set_camera(const double longitude_deg, const double latitude_deg) {
     longitude_deg_ = wrap_longitude(longitude_deg);
     latitude_deg_ = std::clamp(latitude_deg, -89.5, 89.5);
+    update();
+}
+
+void MapCanvas::set_viewport(
+    const double zoom,
+    const std::optional<geometry::PlanarPoint> flat_center
+) {
+    zoom_ = std::clamp(zoom, 0.55, 8.0);
+    if (scene_.mode != ViewMode::globe) {
+        flat_pan_mode_ = scene_.mode;
+        flat_pan_px_ = {};
+        if (flat_center.has_value()) {
+            // Reuse the exact production fit/scale transform instead of copying
+            // its math into screenshot tooling. The tiny paint device is never
+            // rendered; apply_world_transform only needs an active QPainter to
+            // expose the same world transform used by paintEvent().
+            QImage scratch(1, 1, QImage::Format_ARGB32_Premultiplied);
+            QPainter transform_painter(&scratch);
+            apply_world_transform(
+                transform_painter,
+                scene_bounds(scene_),
+                width(),
+                height(),
+                zoom_
+            );
+            const QPointF target = transform_painter.worldTransform().map(
+                QPointF(flat_center->x, flat_center->y)
+            );
+            flat_pan_px_ = QPointF(
+                0.5 * static_cast<double>(width()),
+                0.5 * static_cast<double>(height())
+            ) - target;
+        }
+    }
     update();
 }
 
