@@ -74,6 +74,9 @@ add_executable(aeris-desktop-render-probe
     src/project_model.cpp
     src/project_model.hpp
 )
+target_include_directories(aeris-desktop-render-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_link_libraries(aeris-desktop-render-probe PRIVATE
     AERIS::core
     AERIS::storage
