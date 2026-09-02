@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDockWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QKeySequence>
@@ -43,6 +44,14 @@ QLabel* selectable_value(QWidget* parent) {
     return QDateTime::currentDateTimeUtc()
         .toString(Qt::ISODateWithMs)
         .toStdString();
+}
+
+[[nodiscard]] std::filesystem::path filesystem_path_from_qt(const QString& path) {
+    return QFile(path).filesystemFileName();
+}
+
+[[nodiscard]] QString filesystem_path_to_qt(const std::filesystem::path& path) {
+    return QFile(path).fileName();
 }
 
 }  // namespace
@@ -244,9 +253,7 @@ void MainWindow::open_project() {
     );
     if (selected.isEmpty()) return;
 
-    auto opened = aeris::storage::ProjectStore::open(
-        std::filesystem::path(selected.toStdString())
-    );
+    auto opened = aeris::storage::ProjectStore::open(filesystem_path_from_qt(selected));
     if (!opened.ok()) {
         QMessageBox::critical(
             this,
@@ -388,7 +395,7 @@ void MainWindow::refresh_project_ui() {
     }
 
     const auto& metadata = project_->metadata();
-    project_path_value_->setText(QString::fromStdString(project_->path().string()));
+    project_path_value_->setText(filesystem_path_to_qt(project_->path()));
     project_uuid_value_->setText(QString::fromStdString(metadata.project_uuid));
     project_revision_value_->setText(QString::number(static_cast<qulonglong>(metadata.revision)));
     project_format_value_->setText(
