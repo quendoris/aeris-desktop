@@ -21,7 +21,7 @@
 
 namespace {
 
-constexpr std::string_view kTimestamp = "2026-08-19T20:00:00.000Z";
+constexpr std::string_view kTimestamp = "2026-08-19T20:00:00Z";
 constexpr std::string_view kLandContentSha =
     "5a9d2b70be942d7d0602ef299afe0ef039463831ade478aae11091f8c202cf6e";
 constexpr std::string_view kAdmin0ContentSha =
