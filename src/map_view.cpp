@@ -126,6 +126,24 @@ constexpr int kMapMarginPx = 24;
     return geometry::PlanarPoint{x / (3.0 * area2), y / (3.0 * area2)};
 }
 
+[[nodiscard]] bool rect_inside_circle(
+    const QRectF& rect,
+    const QPointF& center,
+    const double radius
+) noexcept {
+    if (radius <= 0.0) return false;
+    const double radius2 = radius * radius;
+    const auto inside = [&](const QPointF& point) noexcept {
+        const double dx = point.x() - center.x();
+        const double dy = point.y() - center.y();
+        return dx * dx + dy * dy <= radius2;
+    };
+    return inside(rect.topLeft()) &&
+        inside(rect.topRight()) &&
+        inside(rect.bottomLeft()) &&
+        inside(rect.bottomRight());
+}
+
 void draw_country_labels(
     QPainter& painter,
     const view::SceneGeometry& scene,
@@ -141,6 +159,20 @@ void draw_country_labels(
     };
 
     const QTransform world = painter.worldTransform();
+    const double device_area_scale = std::abs(world.determinant());
+    const bool globe_labels =
+        scene.mode == view::SurfaceMode::globe && scene.globe_radius_m > 0.0;
+    QPointF globe_center{};
+    double globe_radius_px = 0.0;
+    if (globe_labels) {
+        globe_center = world.map(QPointF(0.0, 0.0));
+        const QPointF edge = world.map(QPointF(scene.globe_radius_m, 0.0));
+        globe_radius_px = std::hypot(
+            edge.x() - globe_center.x(),
+            edge.y() - globe_center.y()
+        );
+    }
+
     QFont font = painter.font();
     font.setPixelSize(11);
     font.setWeight(QFont::DemiBold);
@@ -170,14 +202,22 @@ void draw_country_labels(
         const QPointF device = world.map(QPointF(anchor->x, anchor->y));
         const QString label = QString::fromStdString(*name);
         const QRectF text_rect = metrics.boundingRect(label);
+        const double text_area = std::max(1.0, text_rect.width() * text_rect.height());
+        const double projected_area = largest_area * device_area_scale;
+        if (projected_area < text_area * 1.6) continue;
+
         QRectF collision(
-            device.x() - text_rect.width() * 0.5 - 4.0,
-            device.y() - text_rect.height() * 0.5 - 2.0,
-            text_rect.width() + 8.0,
-            text_rect.height() + 4.0
+            device.x() - text_rect.width() * 0.5 - 6.0,
+            device.y() - text_rect.height() * 0.5 - 4.0,
+            text_rect.width() + 12.0,
+            text_rect.height() + 8.0
         );
         if (!painter.viewport().intersects(collision.toRect())) continue;
-        candidates.push_back({label, device, collision, largest_area});
+        if (globe_labels &&
+            !rect_inside_circle(collision, globe_center, globe_radius_px - 3.0)) {
+            continue;
+        }
+        candidates.push_back({label, device, collision, projected_area});
     }
 
     std::sort(
@@ -190,6 +230,15 @@ void draw_country_labels(
 
     painter.save();
     painter.resetTransform();
+    if (globe_labels && globe_radius_px > 1.0) {
+        QPainterPath globe_clip;
+        globe_clip.addEllipse(
+            globe_center,
+            globe_radius_px - 1.0,
+            globe_radius_px - 1.0
+        );
+        painter.setClipPath(globe_clip, Qt::IntersectClip);
+    }
     painter.setFont(font);
     painter.setPen(QColor(232, 233, 229));
     std::vector<QRectF> occupied;
@@ -209,7 +258,7 @@ void draw_country_labels(
             candidate.text
         );
         occupied.push_back(candidate.collision);
-        if (occupied.size() >= 64U) break;
+        if (occupied.size() >= 48U) break;
     }
     painter.restore();
 }
