@@ -22,6 +22,8 @@
 
 namespace {
 
+constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
+
 [[nodiscard]] QImage render_view(aeris::desktop::MapView& view) {
     QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
@@ -92,6 +94,47 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool verify_globe_preview_fill(
+    const aeris::desktop::ProjectModel& model
+) {
+    const auto source_it = model.sources.find(std::string(kPoliticalSourceId));
+    if (source_it == model.sources.end()) {
+        std::cerr << "durable political source is missing\n";
+        return false;
+    }
+
+    aeris::view::SceneRequest request{};
+    request.mode = aeris::view::SurfaceMode::globe;
+    request.quality = aeris::view::SceneQuality::preview;
+    request.camera_longitude_deg = 41.0;
+    request.camera_latitude_deg = 17.0;
+    const auto preview = aeris::view::build_scene_geometry(
+        *source_it->second,
+        request
+    );
+    if (!preview.ok || preview.canceled || preview.fill_rings == 0U) {
+        std::cerr
+            << "durable political globe preview has no fill geometry: "
+            << preview.diagnostic << '\n';
+        return false;
+    }
+
+    std::size_t filled_features = 0U;
+    for (const auto& feature : preview.features) {
+        if (!feature.fill_rings.empty()) ++filled_features;
+    }
+    if (filled_features == 0U) {
+        std::cerr << "durable political globe preview has no filled features\n";
+        return false;
+    }
+
+    std::cout
+        << "durable political globe preview: PASS ("
+        << filled_features << " filled features, "
+        << preview.fill_rings << " fill rings)\n";
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -122,7 +165,8 @@ int main(int argc, char** argv) {
             *model_result.model,
             aeris::projection::EqualAreaPrimitive::mollweide,
             "Mollweide"
-        )) {
+        ) ||
+        !verify_globe_preview_fill(*model_result.model)) {
         return EXIT_FAILURE;
     }
 
