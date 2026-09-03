@@ -54,6 +54,9 @@ private:
     QLabel* project_projection_value_{nullptr};
     QLabel* project_state_value_{nullptr};
     QAction* close_project_action_{nullptr};
+    QAction* zoom_in_action_{nullptr};
+    QAction* zoom_out_action_{nullptr};
+    QAction* reset_view_action_{nullptr};
 
     std::unique_ptr<aeris::storage::ProjectStore> project_;
     std::shared_ptr<const ProjectModel> model_;
