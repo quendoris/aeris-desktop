@@ -4,6 +4,7 @@
 #include "map_view.hpp"
 
 #include "aeris/storage/layer.hpp"
+#include "aeris/view/surface.hpp"
 
 #include <QFontMetricsF>
 #include <QKeyEvent>
@@ -52,6 +53,19 @@ constexpr double kDoubleClickZoomFactor = 1.8;
     return path;
 }
 
+[[nodiscard]] QPainterPath surface_path(
+    const view::PlanarSurfaceGeometry& surface
+) {
+    QPainterPath path;
+    if (!surface.ok || surface.outline.size() < 3U) return path;
+    path.moveTo(surface.outline.front().x, surface.outline.front().y);
+    for (std::size_t index = 1U; index < surface.outline.size(); ++index) {
+        path.lineTo(surface.outline[index].x, surface.outline[index].y);
+    }
+    path.closeSubpath();
+    return path;
+}
+
 [[nodiscard]] bool combined_bounds(
     const RenderFrame& frame,
     double& min_x,
@@ -59,6 +73,18 @@ constexpr double kDoubleClickZoomFactor = 1.8;
     double& max_x,
     double& max_y
 ) {
+    if (frame.request.mode != view::SurfaceMode::globe) {
+        const view::PlanarSurfaceGeometry surface =
+            view::build_planar_surface_geometry(frame.request.mode);
+        if (surface.ok) {
+            min_x = surface.min_x;
+            min_y = surface.min_y;
+            max_x = surface.max_x;
+            max_y = surface.max_y;
+            return max_x > min_x && max_y > min_y;
+        }
+    }
+
     bool found = false;
     for (const auto& entry : frame.source_scenes) {
         const view::SceneGeometry& scene = entry.second;
@@ -528,6 +554,18 @@ void MapView::paintEvent(QPaintEvent*) {
                     painter.setPen(Qt::NoPen);
                     painter.setBrush(QColor(38, 46, 54));
                     painter.drawEllipse(QPointF(0.0, 0.0), radius, radius);
+                }
+            } else {
+                const view::PlanarSurfaceGeometry surface =
+                    view::build_planar_surface_geometry(mode_);
+                const QPainterPath sheet = surface_path(surface);
+                if (!sheet.isEmpty()) {
+                    QPen edge(QColor(82, 91, 100));
+                    edge.setCosmetic(true);
+                    edge.setWidthF(1.0);
+                    painter.setPen(edge);
+                    painter.setBrush(QColor(38, 46, 54));
+                    painter.drawPath(sheet);
                 }
             }
 
