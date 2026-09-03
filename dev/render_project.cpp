@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QWheelEvent>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -135,6 +136,10 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     return true;
 }
 
+[[nodiscard]] bool nearly_equal(const QPointF& left, const QPointF& right) noexcept {
+    return std::hypot(left.x() - right.x(), left.y() - right.y()) <= 1e-9;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -197,10 +202,20 @@ int main(int argc, char** argv) {
 
     const QImage baseline = render_view(view);
 
+    // Deliberately zoom away from the center. A correct viewport transform
+    // must preserve the projected point below this cursor position.
     const QPointF local_position(
+        static_cast<qreal>(view.width()) * 0.68,
+        static_cast<qreal>(view.height()) * 0.39
+    );
+    const QPointF center(
         static_cast<qreal>(view.width()) * 0.5,
         static_cast<qreal>(view.height()) * 0.5
     );
+    const double old_zoom = view.zoom_factor();
+    const QPointF old_pan = view.viewport_pan();
+    const QPointF anchor_before = (local_position - center - old_pan) / old_zoom;
+
     const QPoint global_point = view.mapToGlobal(local_position.toPoint());
     QWheelEvent zoom_event(
         local_position,
@@ -219,6 +234,40 @@ int main(int argc, char** argv) {
         std::cerr << "map wheel interaction was not accepted\n";
         return EXIT_FAILURE;
     }
+    if (view.zoom_factor() <= old_zoom || view.viewport_pan() == old_pan) {
+        std::cerr << "off-center globe zoom did not update viewport state\n";
+        return EXIT_FAILURE;
+    }
+
+    const QPointF anchor_after =
+        (local_position - center - view.viewport_pan()) / view.zoom_factor();
+    if (!nearly_equal(anchor_before, anchor_after)) {
+        std::cerr
+            << "cursor-anchored globe zoom drifted: before=("
+            << anchor_before.x() << ',' << anchor_before.y()
+            << ") after=(" << anchor_after.x() << ',' << anchor_after.y() << ")\n";
+        return EXIT_FAILURE;
+    }
+
+    // A pixel-delta wheel event exercises the continuous trackpad path rather
+    // than the traditional 120-unit mouse-wheel path.
+    const double angle_zoom = view.zoom_factor();
+    QWheelEvent trackpad_event(
+        local_position,
+        QPointF(global_point),
+        QPoint(0, 20),
+        QPoint(),
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::ScrollUpdate,
+        false
+    );
+    QApplication::sendEvent(&view, &trackpad_event);
+    application.processEvents();
+    if (!trackpad_event.isAccepted() || view.zoom_factor() <= angle_zoom) {
+        std::cerr << "pixel-delta trackpad zoom path did not advance continuously\n";
+        return EXIT_FAILURE;
+    }
 
     const QImage zoomed = render_view(view);
     if (zoomed == baseline) {
@@ -232,6 +281,6 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
-              << " (wheel render changed pixels)\n";
+              << " (cursor-anchored globe + trackpad zoom changed pixels)\n";
     return EXIT_SUCCESS;
 }
