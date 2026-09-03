@@ -85,7 +85,6 @@ SceneController::~SceneController() {
 void SceneController::set_model(std::shared_ptr<const ProjectModel> model) {
     cancel();
     model_ = std::move(model);
-    if (busy_callback_) busy_callback_(false);
 }
 
 void SceneController::set_frame_callback(FrameCallback callback) {
@@ -97,12 +96,81 @@ void SceneController::set_busy_callback(BusyCallback callback) {
 }
 
 void SceneController::request(const view::SceneRequest& request) {
-    cancel();
     if (!model_) return;
 
+    if (request.quality == view::SceneQuality::preview && task_running_) {
+        if (active_quality_ == view::SceneQuality::preview) {
+            // Keep the already-running interactive frame useful and retain only
+            // the newest camera request behind it. This bounds the queue to one
+            // in-flight preview plus one latest viewport instead of repeatedly
+            // canceling work for every mouse-move event.
+            pending_preview_ = request;
+            return;
+        }
+
+        // User interaction takes priority over a release-time verified build.
+        // Preempt the expensive verified generation rather than making the
+        // first visible drag frame wait behind it.
+        if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
+        pool_.clear();
+        ++generation_;
+        task_running_ = false;
+    } else if (request.quality == view::SceneQuality::verified) {
+        // A verified request is authoritative for the release-time camera.
+        // Discard any queued preview target and invalidate currently running
+        // work so the final camera cannot be followed by an older preview.
+        pending_preview_.reset();
+        if (task_running_) {
+            if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
+            pool_.clear();
+            ++generation_;
+            task_running_ = false;
+        }
+    }
+
+    start_request(request);
+}
+
+void SceneController::cancel() {
+    pending_preview_.reset();
+    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
+    pool_.clear();
+    ++generation_;
+    task_running_ = false;
+    set_busy_state(false);
+}
+
+void SceneController::accept_frame(
+    const std::uint64_t generation,
+    RenderFrame frame
+) {
+    if (generation != generation_) return;
+
+    task_running_ = false;
+    const bool completed_preview =
+        frame.request.quality == view::SceneQuality::preview;
+
+    if (frame_callback_) frame_callback_(std::move(frame));
+
+    if (completed_preview && pending_preview_ && model_) {
+        const view::SceneRequest next = *pending_preview_;
+        pending_preview_.reset();
+        start_request(next);
+        return;
+    }
+
+    set_busy_state(false);
+}
+
+void SceneController::start_request(const view::SceneRequest& request) {
+    if (!model_) return;
+
+    ++generation_;
     const std::uint64_t generation = generation_;
     cancel_token_ = std::make_shared<std::atomic_bool>(false);
-    if (busy_callback_) busy_callback_(true);
+    active_quality_ = request.quality;
+    task_running_ = true;
+    set_busy_state(true);
     pool_.start(new SceneTask(
         QPointer<SceneController>(this),
         model_,
@@ -112,22 +180,10 @@ void SceneController::request(const view::SceneRequest& request) {
     ));
 }
 
-void SceneController::cancel() {
-    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    // A one-thread pool can otherwise accumulate obsolete mouse-move previews
-    // behind the currently running generation. They are already stale before
-    // they start, so discard them and let only the newest request queue next.
-    pool_.clear();
-    ++generation_;
-}
-
-void SceneController::accept_frame(
-    const std::uint64_t generation,
-    RenderFrame frame
-) {
-    if (generation != generation_) return;
-    if (busy_callback_) busy_callback_(false);
-    if (frame_callback_) frame_callback_(std::move(frame));
+void SceneController::set_busy_state(const bool busy) {
+    if (busy_ == busy) return;
+    busy_ = busy;
+    if (busy_callback_) busy_callback_(busy_);
 }
 
 }  // namespace aeris::desktop

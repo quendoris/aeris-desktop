@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -46,12 +47,19 @@ public:
     void accept_frame(std::uint64_t generation, RenderFrame frame);
 
 private:
+    void start_request(const view::SceneRequest& request);
+    void set_busy_state(bool busy);
+
     std::shared_ptr<const ProjectModel> model_;
     QThreadPool pool_;
     FrameCallback frame_callback_;
     BusyCallback busy_callback_;
     std::shared_ptr<std::atomic_bool> cancel_token_;
+    std::optional<view::SceneRequest> pending_preview_;
+    view::SceneQuality active_quality_{view::SceneQuality::preview};
     std::uint64_t generation_{0U};
+    bool task_running_{false};
+    bool busy_{false};
 };
 
 }  // namespace aeris::desktop
