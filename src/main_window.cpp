@@ -21,6 +21,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QStatusBar>
 #include <QToolBar>
@@ -29,6 +30,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -161,7 +163,8 @@ void MainWindow::build_ui() {
     auto* explanation = new QLabel(
         QStringLiteral(
             "Choose a planar surface while the world remains folded as a globe. "
-            "Move the physical projection cut independently of the camera, then calculate one verified unfold from that exact cut."
+            "Grab the orange cut directly on the globe or use the precision control, "
+            "then calculate one verified unfold from that exact cut."
         ),
         unfold_widget
     );
@@ -207,6 +210,20 @@ void MainWindow::build_ui() {
         );
         map_view_->set_projection_central_meridian_deg(degrees);
     });
+    connect(
+        workspace_view,
+        &MapWorkspaceView::projectionCutEdited,
+        this,
+        [this](const double degrees) {
+            const QSignalBlocker blocker(cut_slider_);
+            const int slider_value = static_cast<int>(std::lround(degrees * 10.0));
+            cut_slider_->setValue(slider_value);
+            cut_value_label_->setText(
+                QStringLiteral("Cut: %1° · projection frame")
+                    .arg(degrees, 0, 'f', 1)
+            );
+        }
+    );
     unfold_layout->addWidget(cut_slider_);
 
     apply_projection_button_ = new QPushButton(
