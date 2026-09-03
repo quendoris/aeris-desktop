@@ -157,8 +157,8 @@ void MainWindow::build_ui() {
     auto* unfold_layout = new QVBoxLayout(unfold_widget);
     auto* explanation = new QLabel(
         QStringLiteral(
-            "Choose an equal-area unfolding for the current map. "
-            "The globe remains the natural folded state."
+            "Open the globe into one complete equal-area Sinu-Mollweide map. "
+            "The projection cut is a property of the unfolding and may be moved independently of the globe camera."
         ),
         unfold_widget
     );
@@ -167,12 +167,8 @@ void MainWindow::build_ui() {
 
     projection_combo_ = new QComboBox(unfold_widget);
     projection_combo_->addItem(
-        QStringLiteral("Sinusoidal"),
-        static_cast<int>(view::SurfaceMode::sinusoidal)
-    );
-    projection_combo_->addItem(
-        QStringLiteral("Mollweide"),
-        static_cast<int>(view::SurfaceMode::mollweide)
+        QStringLiteral("Sinu-Mollweide"),
+        static_cast<int>(view::SurfaceMode::sinu_mollweide)
     );
     unfold_layout->addWidget(projection_combo_);
 
@@ -392,8 +388,7 @@ void MainWindow::apply_selected_projection() {
     if (!project_) return;
     const auto raw = projection_combo_->currentData().toInt();
     const auto mode = static_cast<view::SurfaceMode>(raw);
-    if (mode != view::SurfaceMode::sinusoidal &&
-        mode != view::SurfaceMode::mollweide) {
+    if (mode != view::SurfaceMode::sinu_mollweide) {
         return;
     }
     map_view_->set_surface_mode(mode);
