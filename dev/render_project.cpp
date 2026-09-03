@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 quendoris
 // SPDX-License-Identifier: AGPL-3.0-only
 
-#include "map_view.hpp"
+#include "map_workspace_view.hpp"
 #include "project_model.hpp"
 
 #include "aeris/storage/project.hpp"
@@ -17,12 +17,11 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
-#include <string_view>
 #include <utility>
 
 namespace {
 
-constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
+constexpr double kProofCutDeg = 37.0;
 
 [[nodiscard]] QImage render_view(aeris::desktop::MapView& view) {
     QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
@@ -33,55 +32,50 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     return image;
 }
 
-[[nodiscard]] bool verify_globe_preview_fill(
-    const aeris::desktop::ProjectModel& model
+[[nodiscard]] bool build_globe_preview_frame(
+    const aeris::desktop::ProjectModel& model,
+    aeris::desktop::RenderFrame& frame
 ) {
-    const auto source_it = model.sources.find(std::string(kPoliticalSourceId));
-    if (source_it == model.sources.end()) {
-        std::cerr << "durable political source is missing\n";
+    frame = {};
+    frame.request.mode = aeris::view::SurfaceMode::globe;
+    frame.request.quality = aeris::view::SceneQuality::preview;
+    frame.request.camera_longitude_deg = 15.0;
+    frame.request.camera_latitude_deg = 20.0;
+
+    for (const auto& entry : model.sources) {
+        auto scene = aeris::view::build_scene_geometry(*entry.second, frame.request);
+        if (!scene.ok || scene.canceled ||
+            scene.fill_rings == 0U || scene.outline_parts == 0U) {
+            std::cerr
+                << "durable Globe preview scene failed for "
+                << entry.first << ": " << scene.diagnostic << '\n';
+            return false;
+        }
+        frame.source_scenes.emplace(entry.first, std::move(scene));
+    }
+
+    if (frame.source_scenes.size() != model.sources.size()) {
+        std::cerr << "durable Globe preview frame lost a source scene\n";
         return false;
     }
 
-    aeris::view::SceneRequest request{};
-    request.mode = aeris::view::SurfaceMode::globe;
-    request.quality = aeris::view::SceneQuality::preview;
-    request.camera_longitude_deg = 41.0;
-    request.camera_latitude_deg = 17.0;
-    const auto preview = aeris::view::build_scene_geometry(
-        *source_it->second,
-        request
-    );
-    if (!preview.ok || preview.canceled || preview.fill_rings == 0U) {
-        std::cerr
-            << "durable political globe preview has no fill geometry: "
-            << preview.diagnostic << '\n';
-        return false;
-    }
-
-    std::size_t filled_features = 0U;
-    for (const auto& feature : preview.features) {
-        if (!feature.fill_rings.empty()) ++filled_features;
-    }
-    if (filled_features == 0U) {
-        std::cerr << "durable political globe preview has no filled features\n";
-        return false;
-    }
-
+    frame.ok = true;
+    frame.diagnostic = "durable filled Globe preview frame";
     std::cout
-        << "durable political globe preview: PASS ("
-        << filled_features << " filled features, "
-        << preview.fill_rings << " fill rings)\n";
+        << "durable Globe preview frame: PASS ("
+        << frame.source_scenes.size() << " sources)\n";
     return true;
 }
 
 [[nodiscard]] bool build_sinu_mollweide_frame(
     const aeris::desktop::ProjectModel& model,
+    const double cut_deg,
     aeris::desktop::RenderFrame& frame
 ) {
     frame = {};
     frame.request.mode = aeris::view::SurfaceMode::sinu_mollweide;
     frame.request.quality = aeris::view::SceneQuality::verified;
-    frame.request.projection_central_meridian_deg = 0.0;
+    frame.request.projection_central_meridian_deg = cut_deg;
 
     for (const auto& entry : model.sources) {
         auto scene = aeris::view::build_scene_geometry(*entry.second, frame.request);
@@ -94,7 +88,7 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
         if (scene.mode != aeris::view::SurfaceMode::sinu_mollweide ||
             scene.fill_rings == 0U || scene.outline_parts == 0U ||
             scene.vertices == 0U ||
-            std::abs(scene.projection_central_meridian_deg) > 1e-12) {
+            std::abs(scene.projection_central_meridian_deg - cut_deg) > 1e-12) {
             std::cerr
                 << "durable Sinu-Mollweide scene is structurally incomplete for "
                 << entry.first << '\n';
@@ -112,7 +106,8 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     frame.diagnostic = "verified durable Sinu-Mollweide frame";
     std::cout
         << "durable Sinu-Mollweide world frame: PASS ("
-        << frame.source_scenes.size() << " sources)\n";
+        << frame.source_scenes.size() << " sources, cut "
+        << cut_deg << " deg)\n";
     return true;
 }
 
@@ -127,8 +122,10 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "usage: aeris-desktop-render-probe <project.aeris> <output.png>\n";
+    if (argc != 4) {
+        std::cerr
+            << "usage: aeris-desktop-render-probe "
+            << "<project.aeris> <surface.png> <seam.png>\n";
         return EXIT_FAILURE;
     }
 
@@ -145,22 +142,15 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    if (!verify_globe_preview_fill(*model_result.model)) {
-        return EXIT_FAILURE;
-    }
-
-    aeris::desktop::RenderFrame frame{};
-    if (!build_sinu_mollweide_frame(*model_result.model, frame)) {
-        return EXIT_FAILURE;
-    }
-
-    aeris::desktop::MapView view;
+    aeris::desktop::MapWorkspaceView view;
     view.resize(1280, 820);
 
     std::optional<aeris::view::SceneRequest> last_request;
+    std::size_t scene_requests = 0U;
     view.set_scene_request_callback(
         [&](const aeris::view::SceneRequest& request) {
             last_request = request;
+            ++scene_requests;
         }
     );
     view.set_project(
@@ -168,17 +158,70 @@ int main(int argc, char** argv) {
         opened.store->metadata().project_uuid,
         opened.store->metadata().revision
     );
+
+    aeris::desktop::RenderFrame globe_frame{};
+    if (!build_globe_preview_frame(*model_result.model, globe_frame)) {
+        return EXIT_FAILURE;
+    }
+    view.set_frame(std::move(globe_frame));
+    view.show();
+    application.processEvents();
+
+    const QImage clean_globe = render_view(view);
+    if (clean_globe.isNull()) {
+        std::cerr << "clean Globe render produced a null image\n";
+        return EXIT_FAILURE;
+    }
+
+    view.set_unfold_target_mode(aeris::view::SurfaceMode::sinu_mollweide);
+    view.set_unfold_tool_active(true);
+    application.processEvents();
+    const QImage default_seam = render_view(view);
+    if (default_seam == clean_globe) {
+        std::cerr << "opening Unfold tool did not reveal the projection seam\n";
+        return EXIT_FAILURE;
+    }
+
+    const std::size_t requests_before_cut_move = scene_requests;
+    view.set_projection_central_meridian_deg(kProofCutDeg);
+    application.processEvents();
+    if (!nearly_equal(view.projection_central_meridian_deg(), kProofCutDeg)) {
+        std::cerr << "projection cut state did not move on the folded Globe\n";
+        return EXIT_FAILURE;
+    }
+    if (scene_requests != requests_before_cut_move) {
+        std::cerr << "moving projection cut rebuilt world geometry before Apply\n";
+        return EXIT_FAILURE;
+    }
+
+    const QImage moved_seam = render_view(view);
+    if (moved_seam == default_seam || moved_seam == clean_globe) {
+        std::cerr << "moving projection cut did not change seam pixels\n";
+        return EXIT_FAILURE;
+    }
+    if (!moved_seam.save(QString::fromLocal8Bit(argv[3]), "PNG")) {
+        std::cerr << "unable to save movable Globe seam output PNG\n";
+        return EXIT_FAILURE;
+    }
+
+    // Applying the selected surface is the first operation that is allowed to
+    // request a heavy verified reprojection. The chosen cut must cross this
+    // boundary unchanged.
     view.set_surface_mode(aeris::view::SurfaceMode::sinu_mollweide);
     if (!last_request.has_value() ||
         last_request->mode != aeris::view::SurfaceMode::sinu_mollweide ||
         last_request->quality != aeris::view::SceneQuality::verified ||
-        !nearly_equal(last_request->projection_central_meridian_deg, 0.0)) {
-        std::cerr << "MapView did not request the primary Sinu-Mollweide surface/cut\n";
+        !nearly_equal(last_request->projection_central_meridian_deg, kProofCutDeg) ||
+        scene_requests != requests_before_cut_move + 1U) {
+        std::cerr << "MapView did not apply the selected Sinu-Mollweide cut exactly once\n";
         return EXIT_FAILURE;
     }
 
+    aeris::desktop::RenderFrame frame{};
+    if (!build_sinu_mollweide_frame(*model_result.model, kProofCutDeg, frame)) {
+        return EXIT_FAILURE;
+    }
     view.set_frame(std::move(frame));
-    view.show();
     application.processEvents();
 
     const QImage baseline = render_view(view);
@@ -313,14 +356,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // Save the verified complete surface before interaction so the CI artifact
-    // is a direct durable-project rendering rather than a diagnostic primitive.
     if (!baseline.save(QString::fromLocal8Bit(argv[2]), "PNG")) {
         std::cerr << "unable to save Sinu-Mollweide output PNG\n";
         return EXIT_FAILURE;
     }
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
-              << " (durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
+              << " + " << argv[3]
+              << " (clean Globe, movable seam without reprojection, applied cut, durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
     return EXIT_SUCCESS;
 }
