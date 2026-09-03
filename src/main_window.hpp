@@ -15,6 +15,7 @@ class QComboBox;
 class QDockWidget;
 class QLabel;
 class QPushButton;
+class QSlider;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -34,6 +35,7 @@ private:
     void open_project();
     void close_project();
     void refresh_project_ui();
+    void refresh_unfold_controls();
     bool load_render_model();
     void rebuild_layer_tree();
     void set_layer_visibility(QTreeWidgetItem* item);
@@ -44,6 +46,8 @@ private:
     QDockWidget* layers_dock_{nullptr};
     QDockWidget* inspector_dock_{nullptr};
     QComboBox* projection_combo_{nullptr};
+    QSlider* cut_slider_{nullptr};
+    QLabel* cut_value_label_{nullptr};
     QPushButton* apply_projection_button_{nullptr};
     QPushButton* return_globe_button_{nullptr};
     QTreeWidget* layer_tree_{nullptr};
