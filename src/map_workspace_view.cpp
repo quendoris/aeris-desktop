@@ -6,6 +6,7 @@
 #include "aeris/geo/wgs84.hpp"
 #include "aeris/view/surface.hpp"
 
+#include <QEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -22,6 +23,8 @@ namespace {
 
 constexpr int kMapMarginPx = 24;
 constexpr double kSeamHitRadiusPx = 9.0;
+constexpr double kSeamHandleHaloRadiusPx = 6.8;
+constexpr double kSeamHandleRadiusPx = 4.1;
 
 struct SeamSegment final {
     geometry::PlanarPoint first{};
@@ -114,42 +117,52 @@ struct SeamSegment final {
     );
 }
 
-[[nodiscard]] double point_segment_distance(
+[[nodiscard]] QPointF closest_point_on_segment(
     const QPointF point,
     const QPointF first,
     const QPointF second
 ) noexcept {
     const QPointF edge = second - first;
     const double length2 = edge.x() * edge.x() + edge.y() * edge.y();
-    if (length2 <= 1e-12) {
-        return std::hypot(point.x() - first.x(), point.y() - first.y());
-    }
+    if (length2 <= 1e-12) return first;
 
     const QPointF from_first = point - first;
     const double projection =
         (from_first.x() * edge.x() + from_first.y() * edge.y()) / length2;
     const double t = std::clamp(projection, 0.0, 1.0);
-    const QPointF closest = first + t * edge;
-    return std::hypot(point.x() - closest.x(), point.y() - closest.y());
+    return first + t * edge;
 }
 
 [[nodiscard]] bool seam_hit_test(
     const MapWorkspaceView& workspace,
-    const QPointF device_point
+    const QPointF device_point,
+    QPointF* closest_device_point = nullptr
 ) {
     const auto seam = current_projection_seam(workspace);
     const auto segments = visible_seam_segments(seam);
     if (segments.empty()) return false;
 
     const QTransform transform = globe_device_transform(workspace);
-    double best = std::numeric_limits<double>::infinity();
+    double best_distance = std::numeric_limits<double>::infinity();
+    QPointF best_point{};
     for (const SeamSegment& segment : segments) {
         const QPointF first = transform.map(QPointF(segment.first.x, segment.first.y));
         const QPointF second = transform.map(QPointF(segment.second.x, segment.second.y));
-        best = std::min(best, point_segment_distance(device_point, first, second));
-        if (best <= kSeamHitRadiusPx) return true;
+        const QPointF closest = closest_point_on_segment(device_point, first, second);
+        const double distance = std::hypot(
+            device_point.x() - closest.x(),
+            device_point.y() - closest.y()
+        );
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_point = closest;
+        }
     }
-    return false;
+
+    if (closest_device_point != nullptr && std::isfinite(best_distance)) {
+        *closest_device_point = best_point;
+    }
+    return best_distance <= kSeamHitRadiusPx;
 }
 
 [[nodiscard]] bool device_to_globe_point(
@@ -180,8 +193,9 @@ MapWorkspaceView::MapWorkspaceView(QWidget* parent)
 void MapWorkspaceView::set_unfold_tool_active(const bool active) {
     if (unfold_tool_active_ == active) return;
     unfold_tool_active_ = active;
-    if (!active && dragging_projection_cut_) {
+    if (!active) {
         dragging_projection_cut_ = false;
+        projection_cut_pointer_active_ = false;
         unsetCursor();
     }
     update();
@@ -190,6 +204,8 @@ void MapWorkspaceView::set_unfold_tool_active(const bool active) {
 void MapWorkspaceView::set_unfold_target_mode(const view::SurfaceMode mode) {
     if (mode == view::SurfaceMode::globe || unfold_target_mode_ == mode) return;
     unfold_target_mode_ = mode;
+    projection_cut_pointer_active_ = false;
+    unsetCursor();
     update();
 }
 
@@ -222,6 +238,25 @@ void MapWorkspaceView::paintEvent(QPaintEvent* event) {
     cut.setJoinStyle(Qt::RoundJoin);
     painter.setPen(cut);
     painter.drawPath(path);
+
+    if (!projection_cut_pointer_active_) return;
+
+    QPointF handle_device{};
+    if (!seam_hit_test(*this, projection_cut_pointer_device_, &handle_device)) return;
+
+    painter.resetTransform();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(18, 21, 24, 235));
+    painter.drawEllipse(
+        handle_device,
+        kSeamHandleHaloRadiusPx,
+        kSeamHandleHaloRadiusPx
+    );
+    painter.setBrush(QColor(244, 184, 92));
+    const double handle_radius = dragging_projection_cut_
+        ? kSeamHandleRadiusPx + 0.8
+        : kSeamHandleRadiusPx;
+    painter.drawEllipse(handle_device, handle_radius, handle_radius);
 }
 
 void MapWorkspaceView::mousePressEvent(QMouseEvent* event) {
@@ -229,7 +264,10 @@ void MapWorkspaceView::mousePressEvent(QMouseEvent* event) {
         cut_tool_can_interact(*this) &&
         seam_hit_test(*this, event->position())) {
         dragging_projection_cut_ = true;
+        projection_cut_pointer_active_ = true;
+        projection_cut_pointer_device_ = event->position();
         setCursor(Qt::ClosedHandCursor);
+        update();
         event->accept();
         return;
     }
@@ -239,6 +277,9 @@ void MapWorkspaceView::mousePressEvent(QMouseEvent* event) {
 
 void MapWorkspaceView::mouseMoveEvent(QMouseEvent* event) {
     if (dragging_projection_cut_) {
+        projection_cut_pointer_active_ = true;
+        projection_cut_pointer_device_ = event->position();
+
         geometry::PlanarPoint globe_point{};
         if (device_to_globe_point(*this, event->position(), globe_point)) {
             const view::ProjectionCutPickResult picked = view::pick_projection_cut_from_globe(
@@ -254,16 +295,21 @@ void MapWorkspaceView::mouseMoveEvent(QMouseEvent* event) {
                 emit projectionCutEdited(projection_central_meridian_deg());
             }
         }
+        update();
         event->accept();
         return;
     }
 
     if (event->buttons() == Qt::NoButton && cut_tool_can_interact(*this)) {
-        if (seam_hit_test(*this, event->position())) {
+        const bool hit = seam_hit_test(*this, event->position());
+        projection_cut_pointer_active_ = hit;
+        projection_cut_pointer_device_ = event->position();
+        if (hit) {
             setCursor(Qt::OpenHandCursor);
         } else {
             unsetCursor();
         }
+        update();
     }
     MapView::mouseMoveEvent(event);
 }
@@ -271,16 +317,30 @@ void MapWorkspaceView::mouseMoveEvent(QMouseEvent* event) {
 void MapWorkspaceView::mouseReleaseEvent(QMouseEvent* event) {
     if (dragging_projection_cut_ && event->button() == Qt::LeftButton) {
         dragging_projection_cut_ = false;
-        if (cut_tool_can_interact(*this) && seam_hit_test(*this, event->position())) {
+        projection_cut_pointer_device_ = event->position();
+        projection_cut_pointer_active_ =
+            cut_tool_can_interact(*this) &&
+            seam_hit_test(*this, event->position());
+        if (projection_cut_pointer_active_) {
             setCursor(Qt::OpenHandCursor);
         } else {
             unsetCursor();
         }
+        update();
         event->accept();
         return;
     }
 
     MapView::mouseReleaseEvent(event);
+}
+
+void MapWorkspaceView::leaveEvent(QEvent* event) {
+    if (!dragging_projection_cut_) {
+        projection_cut_pointer_active_ = false;
+        unsetCursor();
+        update();
+    }
+    MapView::leaveEvent(event);
 }
 
 }  // namespace aeris::desktop
