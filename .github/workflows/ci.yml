@@ -24,12 +24,19 @@ jobs:
       - name: Checkout desktop
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout AERIS core
+      - name: Checkout exact AERIS core
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: quendoris/aeris-core
-          ref: agent/render-scene-geometry-v0
+          ref: cd9bffef32aa0841e947a75eb9f8108414ab4f75
           path: aeris-core
+
+      - name: Record exact core dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C aeris-core rev-parse HEAD)" = "cd9bffef32aa0841e947a75eb9f8108414ab4f75"
+          git -C aeris-core log -1 --format='AERIS core: %H %s'
 
       - name: Install dependencies
         shell: bash
