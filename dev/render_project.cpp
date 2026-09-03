@@ -3,9 +3,7 @@
 
 #include "map_view.hpp"
 #include "project_model.hpp"
-#include "scene_controller.hpp"
 
-#include "aeris/projection/ring.hpp"
 #include "aeris/storage/project.hpp"
 #include "aeris/view/scene.hpp"
 
@@ -18,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -32,67 +31,6 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     view.render(&painter);
     painter.end();
     return image;
-}
-
-[[nodiscard]] bool verify_flat_projection(
-    const aeris::desktop::ProjectModel& model,
-    const aeris::projection::EqualAreaPrimitive primitive,
-    const std::string_view label
-) {
-    aeris::projection::RingProjectionOptions options{};
-    options.primitive = primitive;
-    options.central_meridian_rad = 0.0;
-    options.relative_area_tolerance = 1e-7;
-    options.absolute_area_tolerance_m2 = 10'000.0;
-    options.initial_geometric_tolerance_m = 2'000.0;
-    options.initial_local_area_tolerance_m2 = 1.0e8;
-    options.max_refinement_rounds = 18U;
-    options.subdivision_max_depth = 32U;
-    options.subdivision_max_segments_per_edge = 1'000'000U;
-    options.max_projection_pieces = 4096U;
-
-    for (const auto& source_entry : model.sources) {
-        const auto& source_id = source_entry.first;
-        const auto& source = *source_entry.second;
-        for (const auto& feature : source.features) {
-            for (std::size_t ring_index = 0U;
-                 ring_index < feature.rings.size();
-                 ++ring_index) {
-                const auto& ring = feature.rings[ring_index].geometry;
-                const auto projected =
-                    aeris::projection::project_wgs84_linear_ring_piecewise_verified(
-                        ring,
-                        options
-                    );
-                if (projected.ok()) continue;
-
-                std::cerr
-                    << label << " flat projection failed"
-                    << " source=" << source_id
-                    << " feature=" << feature.stable_id
-                    << " ring=" << ring_index
-                    << " winding=" << ring.longitude_winding
-                    << " interior_side=" << static_cast<unsigned>(ring.interior_side)
-                    << " error=" << static_cast<unsigned>(projected.error)
-                    << " piece_error=" << static_cast<unsigned>(projected.piece_error)
-                    << " seam_error=" << static_cast<unsigned>(projected.seam_error)
-                    << " geographic_error=" << static_cast<unsigned>(projected.geographic_error)
-                    << " subdivision_error=" << static_cast<unsigned>(projected.subdivision_error)
-                    << " sample_error=" << static_cast<unsigned>(projected.sample_error)
-                    << " failed_piece=" << projected.failed_piece
-                    << " failed_edge=" << projected.failed_edge
-                    << " source_area_m2=" << projected.source_signed_area_m2
-                    << " planar_area_m2=" << projected.planar_signed_area_m2
-                    << " area_error_m2=" << projected.absolute_area_error_m2
-                    << " allowed_m2=" << projected.allowed_area_error_m2
-                    << '\n';
-                return false;
-            }
-        }
-    }
-
-    std::cout << label << " durable flat projection: PASS\n";
-    return true;
 }
 
 [[nodiscard]] bool verify_globe_preview_fill(
@@ -136,6 +74,48 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     return true;
 }
 
+[[nodiscard]] bool build_sinu_mollweide_frame(
+    const aeris::desktop::ProjectModel& model,
+    aeris::desktop::RenderFrame& frame
+) {
+    frame = {};
+    frame.request.mode = aeris::view::SurfaceMode::sinu_mollweide;
+    frame.request.quality = aeris::view::SceneQuality::verified;
+    frame.request.projection_central_meridian_deg = 0.0;
+
+    for (const auto& entry : model.sources) {
+        auto scene = aeris::view::build_scene_geometry(*entry.second, frame.request);
+        if (!scene.ok || scene.canceled) {
+            std::cerr
+                << "durable Sinu-Mollweide scene failed for "
+                << entry.first << ": " << scene.diagnostic << '\n';
+            return false;
+        }
+        if (scene.mode != aeris::view::SurfaceMode::sinu_mollweide ||
+            scene.fill_rings == 0U || scene.outline_parts == 0U ||
+            scene.vertices == 0U ||
+            std::abs(scene.projection_central_meridian_deg) > 1e-12) {
+            std::cerr
+                << "durable Sinu-Mollweide scene is structurally incomplete for "
+                << entry.first << '\n';
+            return false;
+        }
+        frame.source_scenes.emplace(entry.first, std::move(scene));
+    }
+
+    if (frame.source_scenes.size() != model.sources.size()) {
+        std::cerr << "durable Sinu-Mollweide frame lost a source scene\n";
+        return false;
+    }
+
+    frame.ok = true;
+    frame.diagnostic = "verified durable Sinu-Mollweide frame";
+    std::cout
+        << "durable Sinu-Mollweide world frame: PASS ("
+        << frame.source_scenes.size() << " sources)\n";
+    return true;
+}
+
 [[nodiscard]] bool nearly_equal(const QPointF& left, const QPointF& right) noexcept {
     return std::hypot(left.x() - right.x(), left.y() - right.y()) <= 1e-9;
 }
@@ -165,49 +145,51 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    if (!verify_flat_projection(
-            *model_result.model,
-            aeris::projection::EqualAreaPrimitive::sinusoidal,
-            "Sinusoidal"
-        ) ||
-        !verify_flat_projection(
-            *model_result.model,
-            aeris::projection::EqualAreaPrimitive::mollweide,
-            "Mollweide"
-        ) ||
-        !verify_globe_preview_fill(*model_result.model)) {
+    if (!verify_globe_preview_fill(*model_result.model)) {
         return EXIT_FAILURE;
     }
 
     aeris::desktop::RenderFrame frame{};
-    frame.request.mode = aeris::view::SurfaceMode::globe;
-    frame.request.quality = aeris::view::SceneQuality::verified;
-    frame.request.camera_longitude_deg = 15.0;
-    frame.request.camera_latitude_deg = 20.0;
-    for (const auto& entry : model_result.model->sources) {
-        auto scene = aeris::view::build_scene_geometry(*entry.second, frame.request);
-        if (!scene.ok) {
-            std::cerr << "scene failed for " << entry.first << ": " << scene.diagnostic << '\n';
-            return EXIT_FAILURE;
-        }
-        frame.source_scenes.emplace(entry.first, std::move(scene));
+    if (!build_sinu_mollweide_frame(*model_result.model, frame)) {
+        return EXIT_FAILURE;
     }
 
     aeris::desktop::MapView view;
     view.resize(1280, 820);
+
+    std::optional<aeris::view::SceneRequest> last_request;
+    view.set_scene_request_callback(
+        [&](const aeris::view::SceneRequest& request) {
+            last_request = request;
+        }
+    );
     view.set_project(
         model_result.model,
         opened.store->metadata().project_uuid,
         opened.store->metadata().revision
     );
+    view.set_surface_mode(aeris::view::SurfaceMode::sinu_mollweide);
+    if (!last_request.has_value() ||
+        last_request->mode != aeris::view::SurfaceMode::sinu_mollweide ||
+        last_request->quality != aeris::view::SceneQuality::verified ||
+        !nearly_equal(last_request->projection_central_meridian_deg, 0.0)) {
+        std::cerr << "MapView did not request the primary Sinu-Mollweide surface/cut\n";
+        return EXIT_FAILURE;
+    }
+
     view.set_frame(std::move(frame));
     view.show();
     application.processEvents();
 
     const QImage baseline = render_view(view);
+    if (baseline.isNull()) {
+        std::cerr << "durable Sinu-Mollweide render produced a null image\n";
+        return EXIT_FAILURE;
+    }
 
-    // Deliberately zoom away from the center. A correct viewport transform
-    // must preserve the projected point below this cursor position.
+    // Deliberately zoom away from the center. The same projected point must
+    // remain under the cursor; zoom is a viewport transform and does not rebuild
+    // the verified Sinu-Mollweide geometry merely to scale it.
     const QPointF local_position(
         static_cast<qreal>(view.width()) * 0.68,
         static_cast<qreal>(view.height()) * 0.39
@@ -235,11 +217,11 @@ int main(int argc, char** argv) {
     application.processEvents();
 
     if (!zoom_event.isAccepted()) {
-        std::cerr << "map wheel interaction was not accepted\n";
+        std::cerr << "Sinu-Mollweide wheel interaction was not accepted\n";
         return EXIT_FAILURE;
     }
     if (view.zoom_factor() <= old_zoom || view.viewport_pan() == old_pan) {
-        std::cerr << "off-center globe zoom did not update viewport state\n";
+        std::cerr << "off-center Sinu-Mollweide zoom did not update viewport state\n";
         return EXIT_FAILURE;
     }
 
@@ -247,7 +229,7 @@ int main(int argc, char** argv) {
         (local_position - center - view.viewport_pan()) / view.zoom_factor();
     if (!nearly_equal(anchor_before, anchor_after)) {
         std::cerr
-            << "cursor-anchored globe zoom drifted: before=("
+            << "cursor-anchored Sinu-Mollweide zoom drifted: before=("
             << anchor_before.x() << ',' << anchor_before.y()
             << ") after=(" << anchor_after.x() << ',' << anchor_after.y() << ")\n";
         return EXIT_FAILURE;
@@ -269,28 +251,29 @@ int main(int argc, char** argv) {
     QApplication::sendEvent(&view, &trackpad_event);
     application.processEvents();
     if (!trackpad_event.isAccepted() || view.zoom_factor() <= angle_zoom) {
-        std::cerr << "pixel-delta trackpad zoom path did not advance continuously\n";
+        std::cerr << "pixel-delta Sinu-Mollweide trackpad zoom did not advance continuously\n";
         return EXIT_FAILURE;
     }
 
     const QImage zoomed = render_view(view);
     if (zoomed == baseline) {
-        std::cerr << "map wheel interaction did not change rendered pixels\n";
+        std::cerr << "Sinu-Mollweide wheel interaction did not change rendered pixels\n";
         return EXIT_FAILURE;
     }
 
-    // Surface switches must preserve independent navigation contexts. Globe
-    // state is kept while Sinusoidal and Mollweide each begin from their own
-    // default viewport and may subsequently diverge.
-    const double globe_zoom = view.zoom_factor();
-    const QPointF globe_pan = view.viewport_pan();
+    // The complete unfold surface owns an independent navigation context. Globe
+    // camera navigation must not overwrite the user's flat-map zoom/pan state.
+    const double flat_zoom = view.zoom_factor();
+    const QPointF flat_pan = view.viewport_pan();
 
-    view.set_surface_mode(aeris::view::SurfaceMode::sinusoidal);
-    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
-        std::cerr << "Sinusoidal did not start from an independent viewport\n";
+    view.set_surface_mode(aeris::view::SurfaceMode::globe);
+    if (!nearly_equal(view.zoom_factor(), 1.0) ||
+        !nearly_equal(view.viewport_pan(), QPointF{})) {
+        std::cerr << "Globe inherited the Sinu-Mollweide viewport\n";
         return EXIT_FAILURE;
     }
-    QWheelEvent flat_zoom_event(
+
+    QWheelEvent globe_zoom_event(
         local_position,
         QPointF(global_point),
         QPoint(),
@@ -300,46 +283,44 @@ int main(int argc, char** argv) {
         Qt::ScrollUpdate,
         false
     );
-    QApplication::sendEvent(&view, &flat_zoom_event);
-    const double sinusoidal_zoom = view.zoom_factor();
-    const QPointF sinusoidal_pan = view.viewport_pan();
-    if (sinusoidal_zoom <= 1.0 || sinusoidal_pan.isNull()) {
-        std::cerr << "Sinusoidal viewport did not accept independent navigation\n";
+    QApplication::sendEvent(&view, &globe_zoom_event);
+    const double globe_zoom = view.zoom_factor();
+    const QPointF globe_pan = view.viewport_pan();
+    if (globe_zoom <= 1.0 || globe_pan.isNull()) {
+        std::cerr << "Globe viewport did not accept independent navigation\n";
         return EXIT_FAILURE;
     }
 
-    view.set_surface_mode(aeris::view::SurfaceMode::mollweide);
-    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
-        std::cerr << "Mollweide inherited another surface viewport\n";
-        return EXIT_FAILURE;
-    }
-
-    view.set_surface_mode(aeris::view::SurfaceMode::sinusoidal);
-    if (!nearly_equal(view.zoom_factor(), sinusoidal_zoom) ||
-        !nearly_equal(view.viewport_pan(), sinusoidal_pan)) {
-        std::cerr << "Sinusoidal viewport was not restored after a surface switch\n";
+    view.set_surface_mode(aeris::view::SurfaceMode::sinu_mollweide);
+    if (!nearly_equal(view.zoom_factor(), flat_zoom) ||
+        !nearly_equal(view.viewport_pan(), flat_pan)) {
+        std::cerr << "Sinu-Mollweide viewport was not restored after Globe work\n";
         return EXIT_FAILURE;
     }
 
     view.set_surface_mode(aeris::view::SurfaceMode::globe);
     if (!nearly_equal(view.zoom_factor(), globe_zoom) ||
         !nearly_equal(view.viewport_pan(), globe_pan)) {
-        std::cerr << "Globe viewport was not restored after projection work\n";
+        std::cerr << "Globe viewport was not restored after Sinu-Mollweide work\n";
         return EXIT_FAILURE;
     }
 
+    view.set_surface_mode(aeris::view::SurfaceMode::sinu_mollweide);
     view.reset_viewport();
-    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
-        std::cerr << "reset viewport did not restore the active surface default\n";
+    if (!nearly_equal(view.zoom_factor(), 1.0) ||
+        !nearly_equal(view.viewport_pan(), QPointF{})) {
+        std::cerr << "reset viewport did not restore the Sinu-Mollweide default\n";
         return EXIT_FAILURE;
     }
 
+    // Save the verified complete surface before interaction so the CI artifact
+    // is a direct durable-project rendering rather than a diagnostic primitive.
     if (!baseline.save(QString::fromLocal8Bit(argv[2]), "PNG")) {
-        std::cerr << "unable to save output PNG\n";
+        std::cerr << "unable to save Sinu-Mollweide output PNG\n";
         return EXIT_FAILURE;
     }
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
-              << " (cursor anchor, trackpad zoom, and per-surface viewport state)\n";
+              << " (durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
     return EXIT_SUCCESS;
 }
