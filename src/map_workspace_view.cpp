@@ -85,10 +85,10 @@ struct SeamSegment final {
     return path;
 }
 
-[[nodiscard]] QTransform globe_device_transform(const MapWorkspaceView& view) {
+[[nodiscard]] QTransform globe_device_transform(const MapWorkspaceView& workspace) {
     const double radius = geo::authalic_radius_m();
-    const double available_width = std::max(1, view.width() - 2 * kMapMarginPx);
-    const double available_height = std::max(1, view.height() - 2 * kMapMarginPx);
+    const double available_width = std::max(1, workspace.width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, workspace.height() - 2 * kMapMarginPx);
     const double base_scale = std::min(
         available_width / (2.0 * radius),
         available_height / (2.0 * radius)
@@ -96,21 +96,21 @@ struct SeamSegment final {
 
     QTransform transform;
     transform.translate(
-        static_cast<double>(view.width()) * 0.5 + view.viewport_pan().x(),
-        static_cast<double>(view.height()) * 0.5 + view.viewport_pan().y()
+        static_cast<double>(workspace.width()) * 0.5 + workspace.viewport_pan().x(),
+        static_cast<double>(workspace.height()) * 0.5 + workspace.viewport_pan().y()
     );
-    transform.scale(base_scale * view.zoom_factor(), -base_scale * view.zoom_factor());
+    transform.scale(base_scale * workspace.zoom_factor(), -base_scale * workspace.zoom_factor());
     return transform;
 }
 
 [[nodiscard]] view::ProjectionSeamGeometry current_projection_seam(
-    const MapWorkspaceView& view
+    const MapWorkspaceView& workspace
 ) {
     return view::build_projection_seam_geometry(
-        view.unfold_target_mode(),
-        view.displayed_camera_longitude_deg(),
-        view.displayed_camera_latitude_deg(),
-        view.projection_central_meridian_deg()
+        workspace.unfold_target_mode(),
+        workspace.displayed_camera_longitude_deg(),
+        workspace.displayed_camera_latitude_deg(),
+        workspace.projection_central_meridian_deg()
     );
 }
 
@@ -134,14 +134,14 @@ struct SeamSegment final {
 }
 
 [[nodiscard]] bool seam_hit_test(
-    const MapWorkspaceView& view,
+    const MapWorkspaceView& workspace,
     const QPointF device_point
 ) {
-    const auto seam = current_projection_seam(view);
+    const auto seam = current_projection_seam(workspace);
     const auto segments = visible_seam_segments(seam);
     if (segments.empty()) return false;
 
-    const QTransform transform = globe_device_transform(view);
+    const QTransform transform = globe_device_transform(workspace);
     double best = std::numeric_limits<double>::infinity();
     for (const SeamSegment& segment : segments) {
         const QPointF first = transform.map(QPointF(segment.first.x, segment.first.y));
@@ -153,12 +153,12 @@ struct SeamSegment final {
 }
 
 [[nodiscard]] bool device_to_globe_point(
-    const MapWorkspaceView& view,
+    const MapWorkspaceView& workspace,
     const QPointF device_point,
     geometry::PlanarPoint& globe_point
 ) {
     bool invertible = false;
-    const QTransform inverse = globe_device_transform(view).inverted(&invertible);
+    const QTransform inverse = globe_device_transform(workspace).inverted(&invertible);
     if (!invertible) return false;
     const QPointF local = inverse.map(device_point);
     if (!std::isfinite(local.x()) || !std::isfinite(local.y())) return false;
@@ -166,10 +166,10 @@ struct SeamSegment final {
     return true;
 }
 
-[[nodiscard]] bool cut_tool_can_interact(const MapWorkspaceView& view) noexcept {
-    return view.unfold_tool_active() &&
-        view.surface_mode() == view::SurfaceMode::globe &&
-        view.has_current_frame();
+[[nodiscard]] bool cut_tool_can_interact(const MapWorkspaceView& workspace) noexcept {
+    return workspace.unfold_tool_active() &&
+        workspace.surface_mode() == view::SurfaceMode::globe &&
+        workspace.has_current_frame();
 }
 
 }  // namespace
