@@ -23,6 +23,10 @@ namespace aeris::desktop {
 namespace {
 
 constexpr int kMapMarginPx = 24;
+constexpr double kMinimumZoom = 0.45;
+constexpr double kMaximumZoom = 256.0;
+constexpr double kWheelZoomBase = 1.18;
+constexpr double kTrackpadPixelsPerStep = 40.0;
 
 [[nodiscard]] double wrap_longitude(double value) noexcept {
     value = std::fmod(value + 180.0, 360.0);
@@ -500,23 +504,35 @@ void MapView::wheelEvent(QWheelEvent* event) {
         return;
     }
 
-    const double factor = event->angleDelta().y() >= 0 ? 1.15 : 1.0 / 1.15;
+    double steps = 0.0;
+    if (!event->pixelDelta().isNull()) {
+        steps = static_cast<double>(event->pixelDelta().y()) / kTrackpadPixelsPerStep;
+    } else if (!event->angleDelta().isNull()) {
+        steps = static_cast<double>(event->angleDelta().y()) / 120.0;
+    }
+    if (std::abs(steps) <= 1e-12) {
+        event->accept();
+        return;
+    }
+
+    const double factor = std::pow(kWheelZoomBase, steps);
     const double old_zoom = zoom_;
-    const double new_zoom = std::clamp(old_zoom * factor, 0.45, 64.0);
+    const double new_zoom = std::clamp(old_zoom * factor, kMinimumZoom, kMaximumZoom);
     if (new_zoom == old_zoom) {
         event->accept();
         return;
     }
 
-    if (mode_ != view::SurfaceMode::globe) {
-        const QPointF center(
-            static_cast<double>(width()) * 0.5,
-            static_cast<double>(height()) * 0.5
-        );
-        const QPointF cursor = event->position();
-        const double applied = new_zoom / old_zoom;
-        flat_pan_ = cursor - center - applied * (cursor - center - flat_pan_);
-    }
+    // Anchor the projected point under the cursor in device space. This is
+    // render-only navigation: no geometry rebuild is required for zoom itself,
+    // and the same invariant works for both Globe and planar surfaces.
+    const QPointF center(
+        static_cast<double>(width()) * 0.5,
+        static_cast<double>(height()) * 0.5
+    );
+    const QPointF cursor = event->position();
+    const double applied = new_zoom / old_zoom;
+    flat_pan_ = cursor - center - applied * (cursor - center - flat_pan_);
 
     zoom_ = new_zoom;
     update();
