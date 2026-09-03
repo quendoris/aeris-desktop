@@ -11,10 +11,13 @@
 #include <QPointF>
 #include <QWidget>
 
+#include <array>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
 
+class QKeyEvent;
 class QMouseEvent;
 class QWheelEvent;
 
@@ -41,22 +44,36 @@ public:
     void set_frame(RenderFrame frame);
     void set_busy(bool busy);
     void set_surface_mode(view::SurfaceMode mode);
+    void zoom_in();
+    void zoom_out();
+    void reset_viewport();
     [[nodiscard]] view::SurfaceMode surface_mode() const noexcept { return mode_; }
 
     // Read-only viewport state is intentionally exposed for deterministic
     // offscreen interaction proofs. Rendering policy remains private to MapView.
     [[nodiscard]] double zoom_factor() const noexcept { return zoom_; }
-    [[nodiscard]] QPointF viewport_pan() const noexcept { return flat_pan_; }
+    [[nodiscard]] QPointF viewport_pan() const noexcept { return viewport_pan_; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
+    struct ViewportState final {
+        double zoom{1.0};
+        QPointF pan{};
+    };
+
     void request_scene(view::SceneQuality quality);
+    void apply_zoom(double factor, const QPointF& anchor);
+    void store_active_viewport() noexcept;
+    void restore_active_viewport() noexcept;
+    [[nodiscard]] static std::size_t viewport_index(view::SurfaceMode mode) noexcept;
 
     std::shared_ptr<const ProjectModel> model_;
     std::string project_uuid_;
@@ -70,9 +87,8 @@ private:
     double longitude_deg_{15.0};
     double latitude_deg_{20.0};
     double zoom_{1.0};
-    // Device-space viewport translation. The historical name is retained for
-    // this compatibility slice; it now applies to Globe and flat surfaces.
-    QPointF flat_pan_{};
+    QPointF viewport_pan_{};
+    std::array<ViewportState, 3U> viewports_{};
 
     QPoint last_mouse_{};
     bool dragging_{false};
