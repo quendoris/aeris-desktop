@@ -341,6 +341,8 @@ std::size_t MapView::viewport_index(const view::SurfaceMode mode) noexcept {
         return 1U;
     case view::SurfaceMode::mollweide:
         return 2U;
+    case view::SurfaceMode::sinu_mollweide:
+        return 3U;
     }
     return 0U;
 }
@@ -368,6 +370,7 @@ void MapView::set_project(
     mode_ = view::SurfaceMode::globe;
     longitude_deg_ = 15.0;
     latitude_deg_ = 20.0;
+    projection_central_meridian_deg_ = 0.0;
     viewports_ = {};
     restore_active_viewport();
     update();
@@ -383,6 +386,7 @@ void MapView::clear_project() {
     frame_error_.clear();
     busy_ = false;
     mode_ = view::SurfaceMode::globe;
+    projection_central_meridian_deg_ = 0.0;
     viewports_ = {};
     restore_active_viewport();
     update();
@@ -679,6 +683,7 @@ void MapView::request_scene(const view::SceneQuality quality) {
     request.quality = quality;
     request.camera_longitude_deg = longitude_deg_;
     request.camera_latitude_deg = latitude_deg_;
+    request.projection_central_meridian_deg = projection_central_meridian_deg_;
     scene_request_callback_(request);
 }
 
