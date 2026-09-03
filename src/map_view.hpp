@@ -86,9 +86,10 @@ private:
     view::SurfaceMode mode_{view::SurfaceMode::globe};
     double longitude_deg_{15.0};
     double latitude_deg_{20.0};
+    double projection_central_meridian_deg_{0.0};
     double zoom_{1.0};
     QPointF viewport_pan_{};
-    std::array<ViewportState, 3U> viewports_{};
+    std::array<ViewportState, 4U> viewports_{};
 
     QPoint last_mouse_{};
     bool dragging_{false};
