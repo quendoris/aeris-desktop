@@ -36,6 +36,9 @@ add_executable(aeris-desktop
     src/main_window.hpp
     src/map_view.cpp
     src/map_view.hpp
+    src/map_view_projection.cpp
+    src/map_workspace_view.cpp
+    src/map_workspace_view.hpp
     src/project_model.cpp
     src/project_model.hpp
     src/scene_controller.cpp
@@ -69,6 +72,9 @@ add_executable(aeris-desktop-render-probe
     dev/render_project.cpp
     src/map_view.cpp
     src/map_view.hpp
+    src/map_view_projection.cpp
+    src/map_workspace_view.cpp
+    src/map_workspace_view.hpp
     src/project_model.cpp
     src/project_model.hpp
 )
