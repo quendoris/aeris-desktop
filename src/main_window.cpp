@@ -115,7 +115,24 @@ void MainWindow::build_ui() {
     auto* navigate_action = tools_menu->addAction(QStringLiteral("Navigate"));
     navigate_action->setCheckable(true);
     navigate_action->setChecked(true);
+    navigate_action->setEnabled(false);
+    navigate_action->setToolTip(QStringLiteral(
+        "Active map navigation tool: drag, wheel/trackpad, double-click and shortcuts"
+    ));
 
+    zoom_in_action_ = tools_menu->addAction(QStringLiteral("Zoom in"));
+    zoom_in_action_->setShortcuts(QKeySequence::keyBindings(QKeySequence::ZoomIn));
+    connect(zoom_in_action_, &QAction::triggered, map_view_, &MapView::zoom_in);
+
+    zoom_out_action_ = tools_menu->addAction(QStringLiteral("Zoom out"));
+    zoom_out_action_->setShortcuts(QKeySequence::keyBindings(QKeySequence::ZoomOut));
+    connect(zoom_out_action_, &QAction::triggered, map_view_, &MapView::zoom_out);
+
+    reset_view_action_ = tools_menu->addAction(QStringLiteral("Reset view"));
+    reset_view_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+0")));
+    connect(reset_view_action_, &QAction::triggered, map_view_, &MapView::reset_viewport);
+
+    tools_menu->addSeparator();
     auto* unfold_action = tools_menu->addAction(QStringLiteral("Unfold / projection"));
     unfold_action->setCheckable(true);
 
@@ -128,6 +145,10 @@ void MainWindow::build_ui() {
     toolbar->addAction(open_action);
     toolbar->addSeparator();
     toolbar->addAction(navigate_action);
+    toolbar->addAction(zoom_out_action_);
+    toolbar->addAction(zoom_in_action_);
+    toolbar->addAction(reset_view_action_);
+    toolbar->addSeparator();
     toolbar->addAction(unfold_action);
 
     unfold_dock_ = new QDockWidget(QStringLiteral("Unfold / projection"), this);
@@ -381,6 +402,9 @@ void MainWindow::apply_selected_projection() {
 void MainWindow::refresh_project_ui() {
     const bool has_project = project_ != nullptr;
     close_project_action_->setEnabled(has_project);
+    zoom_in_action_->setEnabled(has_project);
+    zoom_out_action_->setEnabled(has_project);
+    reset_view_action_->setEnabled(has_project);
     apply_projection_button_->setEnabled(has_project);
     return_globe_button_->setEnabled(has_project);
 
