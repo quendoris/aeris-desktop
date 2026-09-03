@@ -26,11 +26,20 @@ public:
         return unfold_target_mode_;
     }
 
+signals:
+    // Emitted only for direct manipulation on the Globe. MainWindow mirrors
+    // this value into precision controls without feeding it back into the map.
+    void projectionCutEdited(double degrees);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
     bool unfold_tool_active_{false};
+    bool dragging_projection_cut_{false};
     view::SurfaceMode unfold_target_mode_{view::SurfaceMode::sinu_mollweide};
 };
 
