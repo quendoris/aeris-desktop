@@ -6,6 +6,8 @@
 #include "aeris/storage/layer.hpp"
 
 #include <QFontMetricsF>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -27,6 +29,8 @@ constexpr double kMinimumZoom = 0.45;
 constexpr double kMaximumZoom = 256.0;
 constexpr double kWheelZoomBase = 1.18;
 constexpr double kTrackpadPixelsPerStep = 40.0;
+constexpr double kKeyboardZoomFactor = 1.25;
+constexpr double kDoubleClickZoomFactor = 1.8;
 
 [[nodiscard]] double wrap_longitude(double value) noexcept {
     value = std::fmod(value + 180.0, 360.0);
@@ -329,6 +333,28 @@ MapView::MapView(QWidget* parent)
     setMouseTracking(true);
 }
 
+std::size_t MapView::viewport_index(const view::SurfaceMode mode) noexcept {
+    switch (mode) {
+    case view::SurfaceMode::globe:
+        return 0U;
+    case view::SurfaceMode::sinusoidal:
+        return 1U;
+    case view::SurfaceMode::mollweide:
+        return 2U;
+    }
+    return 0U;
+}
+
+void MapView::store_active_viewport() noexcept {
+    viewports_[viewport_index(mode_)] = {zoom_, viewport_pan_};
+}
+
+void MapView::restore_active_viewport() noexcept {
+    const ViewportState& state = viewports_[viewport_index(mode_)];
+    zoom_ = state.zoom;
+    viewport_pan_ = state.pan;
+}
+
 void MapView::set_project(
     std::shared_ptr<const ProjectModel> model,
     std::string project_uuid,
@@ -342,8 +368,8 @@ void MapView::set_project(
     mode_ = view::SurfaceMode::globe;
     longitude_deg_ = 15.0;
     latitude_deg_ = 20.0;
-    zoom_ = 1.0;
-    flat_pan_ = {};
+    viewports_ = {};
+    restore_active_viewport();
     update();
     request_scene(view::SceneQuality::verified);
 }
@@ -356,8 +382,9 @@ void MapView::clear_project() {
     frame_ = {};
     frame_error_.clear();
     busy_ = false;
-    zoom_ = 1.0;
-    flat_pan_ = {};
+    mode_ = view::SurfaceMode::globe;
+    viewports_ = {};
+    restore_active_viewport();
     update();
 }
 
@@ -384,10 +411,53 @@ void MapView::set_busy(const bool busy) {
 
 void MapView::set_surface_mode(const view::SurfaceMode mode) {
     if (mode_ == mode && has_frame_ && frame_.request.mode == mode) return;
+    store_active_viewport();
     mode_ = mode;
-    zoom_ = 1.0;
-    flat_pan_ = {};
+    restore_active_viewport();
     request_scene(view::SceneQuality::verified);
+    update();
+}
+
+void MapView::apply_zoom(const double factor, const QPointF& anchor) {
+    if (!model_ || !std::isfinite(factor) || factor <= 0.0) return;
+
+    const double old_zoom = zoom_;
+    const double new_zoom = std::clamp(
+        old_zoom * factor,
+        kMinimumZoom,
+        kMaximumZoom
+    );
+    if (new_zoom == old_zoom) return;
+
+    const QPointF center(
+        static_cast<double>(width()) * 0.5,
+        static_cast<double>(height()) * 0.5
+    );
+    const double applied = new_zoom / old_zoom;
+    viewport_pan_ = anchor - center - applied * (anchor - center - viewport_pan_);
+    zoom_ = new_zoom;
+    update();
+}
+
+void MapView::zoom_in() {
+    apply_zoom(
+        kKeyboardZoomFactor,
+        QPointF(static_cast<double>(width()) * 0.5, static_cast<double>(height()) * 0.5)
+    );
+}
+
+void MapView::zoom_out() {
+    apply_zoom(
+        1.0 / kKeyboardZoomFactor,
+        QPointF(static_cast<double>(width()) * 0.5, static_cast<double>(height()) * 0.5)
+    );
+}
+
+void MapView::reset_viewport() {
+    if (!model_) return;
+    zoom_ = 1.0;
+    viewport_pan_ = {};
+    store_active_viewport();
     update();
 }
 
@@ -426,8 +496,8 @@ void MapView::paintEvent(QPaintEvent*) {
 
             QTransform transform;
             transform.translate(
-                static_cast<double>(width()) * 0.5 + flat_pan_.x(),
-                static_cast<double>(height()) * 0.5 + flat_pan_.y()
+                static_cast<double>(width()) * 0.5 + viewport_pan_.x(),
+                static_cast<double>(height()) * 0.5 + viewport_pan_.y()
             );
             transform.scale(base_scale * zoom_, -base_scale * zoom_);
             transform.translate(-center_x, -center_y);
@@ -515,28 +585,32 @@ void MapView::wheelEvent(QWheelEvent* event) {
         return;
     }
 
-    const double factor = std::pow(kWheelZoomBase, steps);
-    const double old_zoom = zoom_;
-    const double new_zoom = std::clamp(old_zoom * factor, kMinimumZoom, kMaximumZoom);
-    if (new_zoom == old_zoom) {
+    apply_zoom(std::pow(kWheelZoomBase, steps), event->position());
+    event->accept();
+}
+
+void MapView::keyPressEvent(QKeyEvent* event) {
+    if (!model_) {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    if (event->matches(QKeySequence::ZoomIn)) {
+        zoom_in();
         event->accept();
         return;
     }
-
-    // Anchor the projected point under the cursor in device space. This is
-    // render-only navigation: no geometry rebuild is required for zoom itself,
-    // and the same invariant works for both Globe and planar surfaces.
-    const QPointF center(
-        static_cast<double>(width()) * 0.5,
-        static_cast<double>(height()) * 0.5
-    );
-    const QPointF cursor = event->position();
-    const double applied = new_zoom / old_zoom;
-    flat_pan_ = cursor - center - applied * (cursor - center - flat_pan_);
-
-    zoom_ = new_zoom;
-    update();
-    event->accept();
+    if (event->matches(QKeySequence::ZoomOut)) {
+        zoom_out();
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_Home ||
+        (event->key() == Qt::Key_0 && event->modifiers().testFlag(Qt::ControlModifier))) {
+        reset_viewport();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
 }
 
 void MapView::mousePressEvent(QMouseEvent* event) {
@@ -570,7 +644,7 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
         );
         request_scene(view::SceneQuality::preview);
     } else {
-        flat_pan_ += QPointF(delta);
+        viewport_pan_ += QPointF(delta);
         update();
     }
     event->accept();
@@ -586,6 +660,15 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
     if (mode_ == view::SurfaceMode::globe) {
         request_scene(view::SceneQuality::verified);
     }
+    event->accept();
+}
+
+void MapView::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (!model_ || event->button() != Qt::LeftButton) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+    apply_zoom(kDoubleClickZoomFactor, event->position());
     event->accept();
 }
 
