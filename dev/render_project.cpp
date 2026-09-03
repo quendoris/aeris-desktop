@@ -4,24 +4,31 @@
 #include "map_workspace_view.hpp"
 #include "project_model.hpp"
 
+#include "aeris/geo/wgs84.hpp"
 #include "aeris/storage/project.hpp"
 #include "aeris/view/scene.hpp"
+#include "aeris/view/surface.hpp"
 
 #include <QApplication>
 #include <QImage>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QTransform>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <utility>
 
 namespace {
 
 constexpr double kProofCutDeg = 37.0;
+constexpr int kMapMarginPx = 24;
 
 [[nodiscard]] QImage render_view(aeris::desktop::MapView& view) {
     QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
@@ -119,6 +126,130 @@ constexpr double kProofCutDeg = 37.0;
     return std::abs(left - right) <= 1e-12;
 }
 
+[[nodiscard]] double angular_difference_deg(
+    const double left,
+    const double right
+) noexcept {
+    return std::abs(std::remainder(left - right, 360.0));
+}
+
+[[nodiscard]] const aeris::view::ProjectionSeamSample* deepest_visible_seam_sample(
+    const aeris::view::ProjectionSeamGeometry& seam
+) noexcept {
+    const aeris::view::ProjectionSeamSample* best = nullptr;
+    double best_depth = -std::numeric_limits<double>::infinity();
+    if (!seam.ok || seam.samples.size() < 3U) return nullptr;
+
+    // Exclude the projection-frame poles: longitude, and therefore a draggable
+    // cut meridian, is mathematically indeterminate exactly at either pole.
+    for (std::size_t index = 1U; index + 1U < seam.samples.size(); ++index) {
+        const auto& sample = seam.samples[index];
+        if (sample.globe_visible && sample.globe_depth_normalized > best_depth) {
+            best = &sample;
+            best_depth = sample.globe_depth_normalized;
+        }
+    }
+    return best;
+}
+
+[[nodiscard]] QTransform globe_device_transform(
+    const aeris::desktop::MapWorkspaceView& view
+) {
+    const double radius = aeris::geo::authalic_radius_m();
+    const double available_width = std::max(1, view.width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, view.height() - 2 * kMapMarginPx);
+    const double base_scale = std::min(
+        available_width / (2.0 * radius),
+        available_height / (2.0 * radius)
+    );
+
+    QTransform transform;
+    transform.translate(
+        static_cast<double>(view.width()) * 0.5 + view.viewport_pan().x(),
+        static_cast<double>(view.height()) * 0.5 + view.viewport_pan().y()
+    );
+    transform.scale(base_scale * view.zoom_factor(), -base_scale * view.zoom_factor());
+    return transform;
+}
+
+[[nodiscard]] QPointF seam_sample_device_point(
+    const aeris::desktop::MapWorkspaceView& view,
+    const aeris::view::ProjectionSeamSample& sample
+) {
+    return globe_device_transform(view).map(QPointF(sample.globe.x, sample.globe.y));
+}
+
+[[nodiscard]] bool drag_projection_cut_with_mouse(
+    QApplication& application,
+    aeris::desktop::MapWorkspaceView& view,
+    const double target_cut_deg
+) {
+    const auto current_seam = aeris::view::build_projection_seam_geometry(
+        view.unfold_target_mode(),
+        view.displayed_camera_longitude_deg(),
+        view.displayed_camera_latitude_deg(),
+        view.projection_central_meridian_deg()
+    );
+    const auto target_seam = aeris::view::build_projection_seam_geometry(
+        view.unfold_target_mode(),
+        view.displayed_camera_longitude_deg(),
+        view.displayed_camera_latitude_deg(),
+        target_cut_deg
+    );
+    const auto* current_sample = deepest_visible_seam_sample(current_seam);
+    const auto* target_sample = deepest_visible_seam_sample(target_seam);
+    if (current_sample == nullptr || target_sample == nullptr) {
+        std::cerr << "unable to find stable visible seam samples for mouse drag\n";
+        return false;
+    }
+
+    const QPointF press_position = seam_sample_device_point(view, *current_sample);
+    const QPointF move_position = seam_sample_device_point(view, *target_sample);
+
+    QMouseEvent press_event(
+        QEvent::MouseButtonPress,
+        press_position,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier
+    );
+    QApplication::sendEvent(&view, &press_event);
+    application.processEvents();
+    if (!press_event.isAccepted()) {
+        std::cerr << "projection seam mouse press was not accepted\n";
+        return false;
+    }
+
+    QMouseEvent move_event(
+        QEvent::MouseMove,
+        move_position,
+        Qt::NoButton,
+        Qt::LeftButton,
+        Qt::NoModifier
+    );
+    QApplication::sendEvent(&view, &move_event);
+    application.processEvents();
+    if (!move_event.isAccepted()) {
+        std::cerr << "projection seam mouse drag was not accepted\n";
+        return false;
+    }
+
+    QMouseEvent release_event(
+        QEvent::MouseButtonRelease,
+        move_position,
+        Qt::LeftButton,
+        Qt::NoButton,
+        Qt::NoModifier
+    );
+    QApplication::sendEvent(&view, &release_event);
+    application.processEvents();
+    if (!release_event.isAccepted()) {
+        std::cerr << "projection seam mouse release was not accepted\n";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -153,6 +284,18 @@ int main(int argc, char** argv) {
             ++scene_requests;
         }
     );
+
+    std::size_t direct_cut_edits = 0U;
+    double last_direct_cut = 0.0;
+    QObject::connect(
+        &view,
+        &aeris::desktop::MapWorkspaceView::projectionCutEdited,
+        [&](const double degrees) {
+            ++direct_cut_edits;
+            last_direct_cut = degrees;
+        }
+    );
+
     view.set_project(
         model_result.model,
         opened.store->metadata().project_uuid,
@@ -183,42 +326,58 @@ int main(int argc, char** argv) {
     }
 
     const std::size_t requests_before_cut_move = scene_requests;
-    view.set_projection_central_meridian_deg(kProofCutDeg);
-    application.processEvents();
-    if (!nearly_equal(view.projection_central_meridian_deg(), kProofCutDeg)) {
-        std::cerr << "projection cut state did not move on the folded Globe\n";
+    if (!drag_projection_cut_with_mouse(application, view, kProofCutDeg)) {
+        return EXIT_FAILURE;
+    }
+    const double selected_cut_deg = view.projection_central_meridian_deg();
+    if (angular_difference_deg(selected_cut_deg, kProofCutDeg) > 1e-7) {
+        std::cerr
+            << "direct projection seam drag recovered wrong cut: got "
+            << selected_cut_deg << " expected " << kProofCutDeg << '\n';
+        return EXIT_FAILURE;
+    }
+    if (direct_cut_edits == 0U ||
+        !nearly_equal(last_direct_cut, selected_cut_deg)) {
+        std::cerr << "direct projection seam drag did not publish edited cut state\n";
         return EXIT_FAILURE;
     }
     if (scene_requests != requests_before_cut_move) {
-        std::cerr << "moving projection cut rebuilt world geometry before Apply\n";
+        std::cerr << "direct projection seam drag rebuilt world geometry before Apply\n";
         return EXIT_FAILURE;
     }
 
     const QImage moved_seam = render_view(view);
     if (moved_seam == default_seam || moved_seam == clean_globe) {
-        std::cerr << "moving projection cut did not change seam pixels\n";
+        std::cerr << "direct projection seam drag did not change seam pixels\n";
         return EXIT_FAILURE;
     }
     if (!moved_seam.save(QString::fromLocal8Bit(argv[3]), "PNG")) {
-        std::cerr << "unable to save movable Globe seam output PNG\n";
+        std::cerr << "unable to save direct-drag Globe seam output PNG\n";
         return EXIT_FAILURE;
     }
 
+    std::cout
+        << "direct Globe seam drag: PASS (cut "
+        << selected_cut_deg << " deg, no world reprojection)\n";
+
     // Applying the selected surface is the first operation that is allowed to
-    // request a heavy verified reprojection. The chosen cut must cross this
-    // boundary unchanged.
+    // request a heavy verified reprojection. The mouse-selected cut must cross
+    // this boundary unchanged.
     view.set_surface_mode(aeris::view::SurfaceMode::sinu_mollweide);
     if (!last_request.has_value() ||
         last_request->mode != aeris::view::SurfaceMode::sinu_mollweide ||
         last_request->quality != aeris::view::SceneQuality::verified ||
-        !nearly_equal(last_request->projection_central_meridian_deg, kProofCutDeg) ||
+        !nearly_equal(
+            last_request->projection_central_meridian_deg,
+            selected_cut_deg
+        ) ||
         scene_requests != requests_before_cut_move + 1U) {
-        std::cerr << "MapView did not apply the selected Sinu-Mollweide cut exactly once\n";
+        std::cerr << "MapView did not apply the mouse-selected Sinu-Mollweide cut exactly once\n";
         return EXIT_FAILURE;
     }
 
     aeris::desktop::RenderFrame frame{};
-    if (!build_sinu_mollweide_frame(*model_result.model, kProofCutDeg, frame)) {
+    if (!build_sinu_mollweide_frame(*model_result.model, selected_cut_deg, frame)) {
         return EXIT_FAILURE;
     }
     view.set_frame(std::move(frame));
@@ -363,6 +522,6 @@ int main(int argc, char** argv) {
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
               << " + " << argv[3]
-              << " (clean Globe, movable seam without reprojection, applied cut, durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
+              << " (clean Globe, direct seam mouse drag without reprojection, mouse-selected applied cut, durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
     return EXIT_SUCCESS;
 }
