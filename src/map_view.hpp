@@ -23,7 +23,9 @@ class QWheelEvent;
 
 namespace aeris::desktop {
 
-class MapView final : public QWidget {
+// MapView owns canonical map presentation and navigation. Tool-specific
+// overlays may derive from it, but they must not reinterpret project geometry.
+class MapView : public QWidget {
     Q_OBJECT
 
 public:
@@ -44,13 +46,35 @@ public:
     void set_frame(RenderFrame frame);
     void set_busy(bool busy);
     void set_surface_mode(view::SurfaceMode mode);
+
+    // The projection cut is edited on the folded Globe without rebuilding map
+    // geometry. Applying a planar surface later carries this value through the
+    // ordinary verified SceneRequest boundary.
+    void set_projection_central_meridian_deg(double degrees);
+
     void zoom_in();
     void zoom_out();
     void reset_viewport();
     [[nodiscard]] view::SurfaceMode surface_mode() const noexcept { return mode_; }
+    [[nodiscard]] double projection_central_meridian_deg() const noexcept {
+        return projection_central_meridian_deg_;
+    }
+
+    // Tool overlays need the camera that produced the frame actually visible
+    // underneath them, not a newer camera whose async preview is still pending.
+    [[nodiscard]] bool has_current_frame() const noexcept {
+        return has_frame_ && frame_.request.mode == mode_;
+    }
+    [[nodiscard]] double displayed_camera_longitude_deg() const noexcept {
+        return has_current_frame() ? frame_.request.camera_longitude_deg : longitude_deg_;
+    }
+    [[nodiscard]] double displayed_camera_latitude_deg() const noexcept {
+        return has_current_frame() ? frame_.request.camera_latitude_deg : latitude_deg_;
+    }
 
     // Read-only viewport state is intentionally exposed for deterministic
-    // offscreen interaction proofs. Rendering policy remains private to MapView.
+    // offscreen interaction proofs and tool overlays. Rendering policy remains
+    // private to MapView.
     [[nodiscard]] double zoom_factor() const noexcept { return zoom_; }
     [[nodiscard]] QPointF viewport_pan() const noexcept { return viewport_pan_; }
 
