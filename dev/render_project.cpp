@@ -179,6 +179,55 @@ constexpr int kMapMarginPx = 24;
     return globe_device_transform(view).map(QPointF(sample.globe.x, sample.globe.y));
 }
 
+[[nodiscard]] QPointF global_device_point(
+    const aeris::desktop::MapWorkspaceView& view,
+    const QPointF local_point
+) {
+    return QPointF(view.mapToGlobal(local_point.toPoint()));
+}
+
+[[nodiscard]] const aeris::view::ProjectionSeamSample* current_stable_seam_sample(
+    const aeris::desktop::MapWorkspaceView& view
+) {
+    const auto seam = aeris::view::build_projection_seam_geometry(
+        view.unfold_target_mode(),
+        view.displayed_camera_longitude_deg(),
+        view.displayed_camera_latitude_deg(),
+        view.projection_central_meridian_deg()
+    );
+    return deepest_visible_seam_sample(seam);
+}
+
+[[nodiscard]] bool hover_projection_cut_with_mouse(
+    QApplication& application,
+    aeris::desktop::MapWorkspaceView& view
+) {
+    const auto seam = aeris::view::build_projection_seam_geometry(
+        view.unfold_target_mode(),
+        view.displayed_camera_longitude_deg(),
+        view.displayed_camera_latitude_deg(),
+        view.projection_central_meridian_deg()
+    );
+    const auto* sample = deepest_visible_seam_sample(seam);
+    if (sample == nullptr) {
+        std::cerr << "unable to find stable visible seam sample for hover proof\n";
+        return false;
+    }
+
+    const QPointF local_position = seam_sample_device_point(view, *sample);
+    QMouseEvent hover_event(
+        QEvent::MouseMove,
+        local_position,
+        global_device_point(view, local_position),
+        Qt::NoButton,
+        Qt::NoButton,
+        Qt::NoModifier
+    );
+    QApplication::sendEvent(&view, &hover_event);
+    application.processEvents();
+    return true;
+}
+
 [[nodiscard]] bool drag_projection_cut_with_mouse(
     QApplication& application,
     aeris::desktop::MapWorkspaceView& view,
@@ -209,6 +258,7 @@ constexpr int kMapMarginPx = 24;
     QMouseEvent press_event(
         QEvent::MouseButtonPress,
         press_position,
+        global_device_point(view, press_position),
         Qt::LeftButton,
         Qt::LeftButton,
         Qt::NoModifier
@@ -223,6 +273,7 @@ constexpr int kMapMarginPx = 24;
     QMouseEvent move_event(
         QEvent::MouseMove,
         move_position,
+        global_device_point(view, move_position),
         Qt::NoButton,
         Qt::LeftButton,
         Qt::NoModifier
@@ -237,6 +288,7 @@ constexpr int kMapMarginPx = 24;
     QMouseEvent release_event(
         QEvent::MouseButtonRelease,
         move_position,
+        global_device_point(view, move_position),
         Qt::LeftButton,
         Qt::NoButton,
         Qt::NoModifier
@@ -324,6 +376,21 @@ int main(int argc, char** argv) {
         std::cerr << "opening Unfold tool did not reveal the projection seam\n";
         return EXIT_FAILURE;
     }
+
+    const std::size_t requests_before_hover = scene_requests;
+    if (!hover_projection_cut_with_mouse(application, view)) {
+        return EXIT_FAILURE;
+    }
+    const QImage hovered_seam = render_view(view);
+    if (hovered_seam == default_seam) {
+        std::cerr << "hovering projection seam did not reveal grab handle pixels\n";
+        return EXIT_FAILURE;
+    }
+    if (scene_requests != requests_before_hover) {
+        std::cerr << "hovering projection seam rebuilt world geometry\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "projection seam hover handle: PASS (presentation only)\n";
 
     const std::size_t requests_before_cut_move = scene_requests;
     if (!drag_projection_cut_with_mouse(application, view, kProofCutDeg)) {
@@ -522,6 +589,6 @@ int main(int argc, char** argv) {
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
               << " + " << argv[3]
-              << " (clean Globe, direct seam mouse drag without reprojection, mouse-selected applied cut, durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
+              << " (clean Globe, hover grab affordance, direct seam mouse drag without reprojection, mouse-selected applied cut, durable Sinu-Mollweide, cursor anchor, trackpad zoom, Globe/flat viewport independence)\n";
     return EXIT_SUCCESS;
 }
