@@ -5,6 +5,7 @@
 #include "project_model.hpp"
 #include "scene_controller.hpp"
 
+#include "aeris/projection/ring.hpp"
 #include "aeris/storage/project.hpp"
 #include "aeris/view/scene.hpp"
 
@@ -16,6 +17,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -27,6 +29,67 @@ namespace {
     view.render(&painter);
     painter.end();
     return image;
+}
+
+[[nodiscard]] bool verify_flat_projection(
+    const aeris::desktop::ProjectModel& model,
+    const aeris::projection::EqualAreaPrimitive primitive,
+    const std::string_view label
+) {
+    aeris::projection::RingProjectionOptions options{};
+    options.primitive = primitive;
+    options.central_meridian_rad = 0.0;
+    options.relative_area_tolerance = 1e-7;
+    options.absolute_area_tolerance_m2 = 10'000.0;
+    options.initial_geometric_tolerance_m = 2'000.0;
+    options.initial_local_area_tolerance_m2 = 1.0e8;
+    options.max_refinement_rounds = 18U;
+    options.subdivision_max_depth = 32U;
+    options.subdivision_max_segments_per_edge = 1'000'000U;
+    options.max_projection_pieces = 4096U;
+
+    for (const auto& source_entry : model.sources) {
+        const auto& source_id = source_entry.first;
+        const auto& source = *source_entry.second;
+        for (const auto& feature : source.features) {
+            for (std::size_t ring_index = 0U;
+                 ring_index < feature.rings.size();
+                 ++ring_index) {
+                const auto& ring = feature.rings[ring_index].geometry;
+                const auto projected =
+                    aeris::projection::project_wgs84_linear_ring_piecewise_verified(
+                        ring,
+                        options
+                    );
+                if (projected.ok()) continue;
+
+                std::cerr
+                    << label << " flat projection failed"
+                    << " source=" << source_id
+                    << " feature=" << feature.stable_id
+                    << " ring=" << ring_index
+                    << " winding=" << ring.longitude_winding
+                    << " interior_side=" << static_cast<unsigned>(ring.interior_side)
+                    << " error=" << static_cast<unsigned>(projected.error)
+                    << " piece_error=" << static_cast<unsigned>(projected.piece_error)
+                    << " seam_error=" << static_cast<unsigned>(projected.seam_error)
+                    << " geographic_error=" << static_cast<unsigned>(projected.geographic_error)
+                    << " subdivision_error=" << static_cast<unsigned>(projected.subdivision_error)
+                    << " sample_error=" << static_cast<unsigned>(projected.sample_error)
+                    << " failed_piece=" << projected.failed_piece
+                    << " failed_edge=" << projected.failed_edge
+                    << " source_area_m2=" << projected.source_signed_area_m2
+                    << " planar_area_m2=" << projected.planar_signed_area_m2
+                    << " area_error_m2=" << projected.absolute_area_error_m2
+                    << " allowed_m2=" << projected.allowed_area_error_m2
+                    << '\n';
+                return false;
+            }
+        }
+    }
+
+    std::cout << label << " durable flat projection: PASS\n";
+    return true;
 }
 
 }  // namespace
@@ -47,6 +110,19 @@ int main(int argc, char** argv) {
     auto model_result = aeris::desktop::load_project_model(*opened.store);
     if (!model_result.ok()) {
         std::cerr << "project model failed: " << model_result.diagnostic << '\n';
+        return EXIT_FAILURE;
+    }
+
+    if (!verify_flat_projection(
+            *model_result.model,
+            aeris::projection::EqualAreaPrimitive::sinusoidal,
+            "Sinusoidal"
+        ) ||
+        !verify_flat_projection(
+            *model_result.model,
+            aeris::projection::EqualAreaPrimitive::mollweide,
+            "Mollweide"
+        )) {
         return EXIT_FAILURE;
     }
 
