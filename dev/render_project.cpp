@@ -140,6 +140,10 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     return std::hypot(left.x() - right.x(), left.y() - right.y()) <= 1e-9;
 }
 
+[[nodiscard]] bool nearly_equal(const double left, const double right) noexcept {
+    return std::abs(left - right) <= 1e-12;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -275,12 +279,67 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // Surface switches must preserve independent navigation contexts. Globe
+    // state is kept while Sinusoidal and Mollweide each begin from their own
+    // default viewport and may subsequently diverge.
+    const double globe_zoom = view.zoom_factor();
+    const QPointF globe_pan = view.viewport_pan();
+
+    view.set_surface_mode(aeris::view::SurfaceMode::sinusoidal);
+    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
+        std::cerr << "Sinusoidal did not start from an independent viewport\n";
+        return EXIT_FAILURE;
+    }
+    QWheelEvent flat_zoom_event(
+        local_position,
+        QPointF(global_point),
+        QPoint(),
+        QPoint(0, 120),
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::ScrollUpdate,
+        false
+    );
+    QApplication::sendEvent(&view, &flat_zoom_event);
+    const double sinusoidal_zoom = view.zoom_factor();
+    const QPointF sinusoidal_pan = view.viewport_pan();
+    if (sinusoidal_zoom <= 1.0 || sinusoidal_pan.isNull()) {
+        std::cerr << "Sinusoidal viewport did not accept independent navigation\n";
+        return EXIT_FAILURE;
+    }
+
+    view.set_surface_mode(aeris::view::SurfaceMode::mollweide);
+    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
+        std::cerr << "Mollweide inherited another surface viewport\n";
+        return EXIT_FAILURE;
+    }
+
+    view.set_surface_mode(aeris::view::SurfaceMode::sinusoidal);
+    if (!nearly_equal(view.zoom_factor(), sinusoidal_zoom) ||
+        !nearly_equal(view.viewport_pan(), sinusoidal_pan)) {
+        std::cerr << "Sinusoidal viewport was not restored after a surface switch\n";
+        return EXIT_FAILURE;
+    }
+
+    view.set_surface_mode(aeris::view::SurfaceMode::globe);
+    if (!nearly_equal(view.zoom_factor(), globe_zoom) ||
+        !nearly_equal(view.viewport_pan(), globe_pan)) {
+        std::cerr << "Globe viewport was not restored after projection work\n";
+        return EXIT_FAILURE;
+    }
+
+    view.reset_viewport();
+    if (!nearly_equal(view.zoom_factor(), 1.0) || !nearly_equal(view.viewport_pan(), QPointF{})) {
+        std::cerr << "reset viewport did not restore the active surface default\n";
+        return EXIT_FAILURE;
+    }
+
     if (!baseline.save(QString::fromLocal8Bit(argv[2]), "PNG")) {
         std::cerr << "unable to save output PNG\n";
         return EXIT_FAILURE;
     }
 
     std::cout << "aeris_desktop_render_probe: PASS " << argv[2]
-              << " (cursor-anchored globe + trackpad zoom changed pixels)\n";
+              << " (cursor anchor, trackpad zoom, and per-surface viewport state)\n";
     return EXIT_SUCCESS;
 }
