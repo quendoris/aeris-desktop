@@ -377,6 +377,18 @@ void MapView::set_project(
     request_scene(view::SceneQuality::verified);
 }
 
+void MapView::set_project_model(
+    std::shared_ptr<const ProjectModel> model,
+    const std::uint64_t revision
+) {
+    model_ = std::move(model);
+    revision_ = revision;
+    has_frame_ = false;
+    frame_error_.clear();
+    update();
+    request_scene(view::SceneQuality::verified);
+}
+
 void MapView::clear_project() {
     model_.reset();
     project_uuid_.clear();
