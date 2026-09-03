@@ -36,10 +36,13 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     bool unfold_tool_active_{false};
     bool dragging_projection_cut_{false};
+    bool projection_cut_pointer_active_{false};
+    QPointF projection_cut_pointer_device_{};
     view::SurfaceMode unfold_target_mode_{view::SurfaceMode::sinu_mollweide};
 };
 
