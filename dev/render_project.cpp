@@ -186,18 +186,6 @@ constexpr int kMapMarginPx = 24;
     return QPointF(view.mapToGlobal(local_point.toPoint()));
 }
 
-[[nodiscard]] const aeris::view::ProjectionSeamSample* current_stable_seam_sample(
-    const aeris::desktop::MapWorkspaceView& view
-) {
-    const auto seam = aeris::view::build_projection_seam_geometry(
-        view.unfold_target_mode(),
-        view.displayed_camera_longitude_deg(),
-        view.displayed_camera_latitude_deg(),
-        view.projection_central_meridian_deg()
-    );
-    return deepest_visible_seam_sample(seam);
-}
-
 [[nodiscard]] bool hover_projection_cut_with_mouse(
     QApplication& application,
     aeris::desktop::MapWorkspaceView& view
