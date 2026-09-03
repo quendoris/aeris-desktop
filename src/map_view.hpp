@@ -43,6 +43,11 @@ public:
     void set_surface_mode(view::SurfaceMode mode);
     [[nodiscard]] view::SurfaceMode surface_mode() const noexcept { return mode_; }
 
+    // Read-only viewport state is intentionally exposed for deterministic
+    // offscreen interaction proofs. Rendering policy remains private to MapView.
+    [[nodiscard]] double zoom_factor() const noexcept { return zoom_; }
+    [[nodiscard]] QPointF viewport_pan() const noexcept { return flat_pan_; }
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
@@ -65,6 +70,8 @@ private:
     double longitude_deg_{15.0};
     double latitude_deg_{20.0};
     double zoom_{1.0};
+    // Device-space viewport translation. The historical name is retained for
+    // this compatibility slice; it now applies to Globe and flat surfaces.
     QPointF flat_pan_{};
 
     QPoint last_mouse_{};
