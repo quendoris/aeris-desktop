@@ -4,6 +4,7 @@
 #include "main_window.hpp"
 
 #include "map_view.hpp"
+#include "map_workspace_view.hpp"
 
 #include "aeris/storage/layer.hpp"
 
@@ -20,6 +21,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSlider>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QTreeWidget>
@@ -94,7 +96,8 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 void MainWindow::build_ui() {
-    map_view_ = new MapView(this);
+    auto* workspace_view = new MapWorkspaceView(this);
+    map_view_ = workspace_view;
     setCentralWidget(map_view_);
 
     auto* file_menu = menuBar()->addMenu(QStringLiteral("&File"));
@@ -157,8 +160,8 @@ void MainWindow::build_ui() {
     auto* unfold_layout = new QVBoxLayout(unfold_widget);
     auto* explanation = new QLabel(
         QStringLiteral(
-            "Open the globe into one complete equal-area Sinu-Mollweide map. "
-            "The projection cut is a property of the unfolding and may be moved independently of the globe camera."
+            "Choose a planar surface while the world remains folded as a globe. "
+            "Move the physical projection cut independently of the camera, then calculate one verified unfold from that exact cut."
         ),
         unfold_widget
     );
@@ -170,10 +173,44 @@ void MainWindow::build_ui() {
         QStringLiteral("Sinu-Mollweide"),
         static_cast<int>(view::SurfaceMode::sinu_mollweide)
     );
+    connect(
+        projection_combo_,
+        &QComboBox::currentIndexChanged,
+        this,
+        [this, workspace_view](const int) {
+            const auto mode = static_cast<view::SurfaceMode>(
+                projection_combo_->currentData().toInt()
+            );
+            workspace_view->set_unfold_target_mode(mode);
+        }
+    );
     unfold_layout->addWidget(projection_combo_);
 
+    cut_value_label_ = new QLabel(
+        QStringLiteral("Cut: 0.0° · projection frame"),
+        unfold_widget
+    );
+    unfold_layout->addWidget(cut_value_label_);
+
+    cut_slider_ = new QSlider(Qt::Horizontal, unfold_widget);
+    cut_slider_->setRange(-1800, 1800);
+    cut_slider_->setSingleStep(10);
+    cut_slider_->setPageStep(150);
+    cut_slider_->setValue(0);
+    cut_slider_->setToolTip(QStringLiteral(
+        "Move the physical projection cut without rebuilding the globe"
+    ));
+    connect(cut_slider_, &QSlider::valueChanged, this, [this](const int value) {
+        const double degrees = static_cast<double>(value) / 10.0;
+        cut_value_label_->setText(
+            QStringLiteral("Cut: %1° · projection frame").arg(degrees, 0, 'f', 1)
+        );
+        map_view_->set_projection_central_meridian_deg(degrees);
+    });
+    unfold_layout->addWidget(cut_slider_);
+
     apply_projection_button_ = new QPushButton(
-        QStringLiteral("Apply / unfold"),
+        QStringLiteral("Calculate / unfold"),
         unfold_widget
     );
     connect(
@@ -190,6 +227,7 @@ void MainWindow::build_ui() {
     );
     connect(return_globe_button_, &QPushButton::clicked, this, [this]() {
         map_view_->set_surface_mode(view::SurfaceMode::globe);
+        refresh_unfold_controls();
     });
     unfold_layout->addWidget(return_globe_button_);
     unfold_layout->addStretch(1);
@@ -198,7 +236,15 @@ void MainWindow::build_ui() {
     unfold_dock_->hide();
 
     connect(unfold_action, &QAction::toggled, unfold_dock_, &QDockWidget::setVisible);
-    connect(unfold_dock_, &QDockWidget::visibilityChanged, unfold_action, &QAction::setChecked);
+    connect(
+        unfold_dock_,
+        &QDockWidget::visibilityChanged,
+        this,
+        [unfold_action, workspace_view](const bool visible) {
+            unfold_action->setChecked(visible);
+            workspace_view->set_unfold_tool_active(visible);
+        }
+    );
 
     layers_dock_ = new QDockWidget(QStringLiteral("Layers"), this);
     layers_dock_->setObjectName(QStringLiteral("layersDock"));
@@ -253,7 +299,9 @@ void MainWindow::apply_theme() {
         QToolButton:checked { background: #3a4655; border-color: #61748b; }
         QDockWidget::title { background: #1d2024; padding: 7px; }
         QComboBox, QPushButton { background: #292d33; border: 1px solid #3a4049; border-radius: 5px; padding: 7px; }
-        QPushButton:disabled { color: #737982; }
+        QPushButton:disabled, QComboBox:disabled, QSlider:disabled, QLabel:disabled { color: #737982; }
+        QSlider::groove:horizontal { height: 4px; background: #343941; border-radius: 2px; }
+        QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #b7c0ca; border-radius: 7px; }
         QTreeWidget { background: #1b1e22; border: none; outline: none; }
         QTreeWidget::item { padding: 6px 4px; }
         QTreeWidget::item:selected { background: #303640; }
@@ -300,6 +348,7 @@ void MainWindow::close_project() {
     model_.reset();
     project_.reset();
     map_view_->clear_project();
+    cut_slider_->setValue(0);
     rebuild_layer_tree();
     refresh_project_ui();
     statusBar()->showMessage(QStringLiteral("Project closed"), 2000);
@@ -322,6 +371,7 @@ bool MainWindow::load_render_model() {
     scene_controller_.set_model(model_);
     const auto& metadata = project_->metadata();
     map_view_->set_project(model_, metadata.project_uuid, metadata.revision);
+    cut_slider_->setValue(0);
     rebuild_layer_tree();
     return true;
 }
@@ -385,13 +435,30 @@ void MainWindow::set_layer_visibility(QTreeWidgetItem* item) {
 }
 
 void MainWindow::apply_selected_projection() {
-    if (!project_) return;
+    if (!project_ || map_view_->surface_mode() != view::SurfaceMode::globe) return;
     const auto raw = projection_combo_->currentData().toInt();
     const auto mode = static_cast<view::SurfaceMode>(raw);
-    if (mode != view::SurfaceMode::sinu_mollweide) {
-        return;
-    }
+    if (mode == view::SurfaceMode::globe) return;
+
+    statusBar()->showMessage(
+        QStringLiteral("Calculating verified %1 from cut %2°…")
+            .arg(QString::fromLatin1(view::surface_mode_name(mode)))
+            .arg(map_view_->projection_central_meridian_deg(), 0, 'f', 1)
+    );
     map_view_->set_surface_mode(mode);
+    refresh_unfold_controls();
+}
+
+void MainWindow::refresh_unfold_controls() {
+    const bool has_project = project_ != nullptr;
+    const bool on_globe = has_project &&
+        map_view_->surface_mode() == view::SurfaceMode::globe;
+
+    projection_combo_->setEnabled(on_globe);
+    cut_slider_->setEnabled(on_globe);
+    cut_value_label_->setEnabled(on_globe);
+    apply_projection_button_->setEnabled(on_globe);
+    return_globe_button_->setEnabled(has_project && !on_globe);
 }
 
 void MainWindow::refresh_project_ui() {
@@ -400,8 +467,7 @@ void MainWindow::refresh_project_ui() {
     zoom_in_action_->setEnabled(has_project);
     zoom_out_action_->setEnabled(has_project);
     reset_view_action_->setEnabled(has_project);
-    apply_projection_button_->setEnabled(has_project);
-    return_globe_button_->setEnabled(has_project);
+    refresh_unfold_controls();
 
     if (!project_) {
         project_path_value_->setText(QStringLiteral("—"));
