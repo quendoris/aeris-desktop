@@ -4,6 +4,7 @@
 #pragma once
 
 #include "aeris/view/scene.hpp"
+#include "elevation_renderer.hpp"
 #include "project_model.hpp"
 #include "scene_controller.hpp"
 
@@ -124,6 +125,7 @@ private:
     double zoom_{1.0};
     QPointF viewport_pan_{};
     std::array<ViewportState, 4U> viewports_{};
+    ElevationSurfaceCache elevation_surface_cache_{};
 
     QPoint last_mouse_{};
     bool dragging_{false};
