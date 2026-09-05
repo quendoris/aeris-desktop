@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -126,6 +127,43 @@ constexpr double kDoubleClickZoomFactor = 1.8;
         return std::nullopt;
     }
     return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::int64_t> integer_property(
+    const source::Feature& feature,
+    const std::string_view key
+) noexcept {
+    for (const source::FeatureProperty& property : feature.properties) {
+        if (property.key != key) continue;
+        const auto* value = std::get_if<std::int64_t>(&property.value);
+        if (value != nullptr) return *value;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] QColor political_country_color(
+    const source::Feature* feature
+) noexcept {
+    constexpr int alpha = 214;
+    if (feature != nullptr) {
+        const auto assignment = integer_property(*feature, "mapcolor7");
+        if (assignment.has_value()) {
+            switch (*assignment) {
+            case 1: return QColor(189, 128, 119, alpha);
+            case 2: return QColor(154, 171, 113, alpha);
+            case 3: return QColor(108, 154, 181, alpha);
+            case 4: return QColor(189, 156, 96, alpha);
+            case 5: return QColor(143, 124, 176, alpha);
+            case 6: return QColor(105, 169, 148, alpha);
+            case 7: return QColor(181, 118, 151, alpha);
+            default: break;
+            }
+        }
+    }
+    // Backward-compatible fallback for older .aeris projects without the
+    // cartographic enrichment channel.
+    return QColor(123, 143, 157, 120);
 }
 
 [[nodiscard]] double ring_area2(
@@ -317,14 +355,21 @@ void draw_layer_geometry(
     const bool draw_border = role == storage::kLayerRolePoliticalBoundaryV1;
     if (!fill_land && !draw_coast && !fill_country && !draw_border) return;
 
-    if (fill_land || fill_country) {
+    if (fill_land) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(
-            fill_land
-                ? QColor(190, 194, 181)
-                : QColor(123, 143, 157, 82)
-        );
+        painter.setBrush(QColor(190, 194, 181));
         for (const view::SceneFeatureGeometry& feature : scene.features) {
+            const QPainterPath path = fill_path(feature);
+            if (!path.isEmpty()) painter.drawPath(path);
+        }
+    }
+
+    if (fill_country) {
+        painter.setPen(Qt::NoPen);
+        for (const view::SceneFeatureGeometry& feature : scene.features) {
+            const source::Feature* source_feature =
+                find_source_feature(source_result, feature.stable_id);
+            painter.setBrush(political_country_color(source_feature));
             const QPainterPath path = fill_path(feature);
             if (!path.isEmpty()) painter.drawPath(path);
         }
@@ -461,7 +506,10 @@ void MapView::set_surface_mode(const view::SurfaceMode mode) {
 }
 
 void MapView::apply_zoom(const double factor, const QPointF& anchor) {
-    if (!model_ || !std::isfinite(factor) || factor <= 0.0) return;
+    if (!model_ || model_->sources.empty() ||
+        !std::isfinite(factor) || factor <= 0.0) {
+        return;
+    }
 
     const double old_zoom = zoom_;
     const double new_zoom = std::clamp(
@@ -496,7 +544,7 @@ void MapView::zoom_out() {
 }
 
 void MapView::reset_viewport() {
-    if (!model_) return;
+    if (!model_ || model_->sources.empty()) return;
     zoom_ = 1.0;
     viewport_pan_ = {};
     store_active_viewport();
@@ -511,7 +559,24 @@ void MapView::paintEvent(QPaintEvent*) {
     const QRect content = rect().adjusted(48, 48, -48, -48);
     if (!model_) {
         painter.setPen(QColor(224, 227, 231));
-        painter.drawText(content, Qt::AlignCenter, QStringLiteral("Open an .aeris project to begin"));
+        painter.drawText(
+            content,
+            Qt::AlignCenter,
+            QStringLiteral("Create or open an .aeris project to begin")
+        );
+        return;
+    }
+    if (model_->sources.empty()) {
+        painter.setPen(QColor(224, 227, 231));
+        painter.drawText(
+            content,
+            Qt::AlignCenter | Qt::TextWordWrap,
+            QStringLiteral(
+                "Empty AERIS project\n\n"
+                "The durable project is ready. Add separately downloaded map data from:\n"
+                "Data → Import downloaded Natural Earth world…"
+            )
+        );
         return;
     }
 
@@ -623,7 +688,7 @@ void MapView::paintEvent(QPaintEvent*) {
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
-    if (!model_) {
+    if (!model_ || model_->sources.empty()) {
         QWidget::wheelEvent(event);
         return;
     }
@@ -644,7 +709,7 @@ void MapView::wheelEvent(QWheelEvent* event) {
 }
 
 void MapView::keyPressEvent(QKeyEvent* event) {
-    if (!model_) {
+    if (!model_ || model_->sources.empty()) {
         QWidget::keyPressEvent(event);
         return;
     }
@@ -668,7 +733,7 @@ void MapView::keyPressEvent(QKeyEvent* event) {
 }
 
 void MapView::mousePressEvent(QMouseEvent* event) {
-    if (!model_ || event->button() != Qt::LeftButton) {
+    if (!model_ || model_->sources.empty() || event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
         return;
     }
@@ -718,7 +783,7 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void MapView::mouseDoubleClickEvent(QMouseEvent* event) {
-    if (!model_ || event->button() != Qt::LeftButton) {
+    if (!model_ || model_->sources.empty() || event->button() != Qt::LeftButton) {
         QWidget::mouseDoubleClickEvent(event);
         return;
     }
@@ -727,7 +792,7 @@ void MapView::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 void MapView::request_scene(const view::SceneQuality quality) {
-    if (!model_ || !scene_request_callback_) return;
+    if (!model_ || model_->sources.empty() || !scene_request_callback_) return;
     view::SceneRequest request{};
     request.mode = mode_;
     request.quality = quality;
