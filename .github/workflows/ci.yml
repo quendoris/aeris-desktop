@@ -54,7 +54,7 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-demo-project aeris-desktop-render-probe
+          --target aeris-desktop aeris-demo-project aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
 
       - name: Fetch exact pinned demo sources
@@ -72,6 +72,13 @@ jobs:
       - name: Remove acquisition sources
         shell: bash
         run: rm -rf ${{ runner.temp }}/natural-earth-v5.1.2
+
+      - name: Prove all catalog projections from aeris only
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build/aeris-desktop-projection-catalog-probe
+          ${{ runner.temp }}/desktop-demo.aeris
 
       - name: Render desktop from aeris only
         env:
