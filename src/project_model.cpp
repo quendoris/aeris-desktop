@@ -3,9 +3,14 @@
 
 #include "project_model.hpp"
 
+#include "aeris/geo/wgs84.hpp"
 #include "aeris/project/source_reader.hpp"
 #include "aeris/storage/resource.hpp"
 
+#include <QImage>
+
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <string_view>
 #include <unordered_map>
@@ -15,6 +20,12 @@
 namespace aeris::desktop {
 namespace {
 
+struct Rgb final {
+    double r{0.0};
+    double g{0.0};
+    double b{0.0};
+};
+
 [[nodiscard]] bool eager_resource_binding(
     const storage::ProjectLayerRecord& layer,
     const storage::LayerResourceBinding& binding
@@ -23,6 +34,182 @@ namespace {
     constexpr std::string_view overview_prefix = "overview:";
     return binding.slot_id.size() > overview_prefix.size() &&
         binding.slot_id.compare(0U, overview_prefix.size(), overview_prefix) == 0;
+}
+
+[[nodiscard]] Rgb mix(const Rgb a, const Rgb b, const double t) noexcept {
+    const double clamped = std::clamp(t, 0.0, 1.0);
+    return {
+        a.r + (b.r - a.r) * clamped,
+        a.g + (b.g - a.g) * clamped,
+        a.b + (b.b - a.b) * clamped,
+    };
+}
+
+[[nodiscard]] Rgb hypsometric_color(const double elevation_m) noexcept {
+    if (elevation_m < -6000.0) return {18.0, 34.0, 66.0};
+    if (elevation_m < -1000.0) {
+        return mix(
+            {18.0, 34.0, 66.0},
+            {42.0, 78.0, 111.0},
+            (elevation_m + 6000.0) / 5000.0
+        );
+    }
+    if (elevation_m < 0.0) {
+        return mix(
+            {42.0, 78.0, 111.0},
+            {67.0, 111.0, 137.0},
+            (elevation_m + 1000.0) / 1000.0
+        );
+    }
+    if (elevation_m < 500.0) {
+        return mix(
+            {83.0, 119.0, 83.0},
+            {111.0, 133.0, 87.0},
+            elevation_m / 500.0
+        );
+    }
+    if (elevation_m < 1500.0) {
+        return mix(
+            {111.0, 133.0, 87.0},
+            {149.0, 130.0, 96.0},
+            (elevation_m - 500.0) / 1000.0
+        );
+    }
+    if (elevation_m < 3000.0) {
+        return mix(
+            {149.0, 130.0, 96.0},
+            {166.0, 149.0, 128.0},
+            (elevation_m - 1500.0) / 1500.0
+        );
+    }
+    if (elevation_m < 5000.0) {
+        return mix(
+            {166.0, 149.0, 128.0},
+            {203.0, 199.0, 190.0},
+            (elevation_m - 3000.0) / 2000.0
+        );
+    }
+    return mix(
+        {203.0, 199.0, 190.0},
+        {239.0, 239.0, 237.0},
+        (elevation_m - 5000.0) / 3500.0
+    );
+}
+
+[[nodiscard]] QImage build_elevation_preview(
+    const elevation::ElevationTile& tile
+) {
+    if (tile.width == 0U || tile.height == 0U ||
+        tile.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+        tile.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+        tile.samples_m.size() !=
+            static_cast<std::size_t>(tile.width) * static_cast<std::size_t>(tile.height)) {
+        return {};
+    }
+
+    QImage image(
+        static_cast<int>(tile.width),
+        static_cast<int>(tile.height),
+        QImage::Format_ARGB32_Premultiplied
+    );
+    if (image.isNull()) return {};
+
+    constexpr double microarcsec_per_degree = 3600.0 * 1000000.0;
+    const double lon_step_deg =
+        static_cast<double>(tile.longitude_step_microarcsec) /
+        microarcsec_per_degree;
+    const double lat_step_deg =
+        static_cast<double>(tile.latitude_step_microarcsec) /
+        microarcsec_per_degree;
+    const double north_deg =
+        static_cast<double>(tile.north_microarcsec) / microarcsec_per_degree;
+    const double step_rad = lat_step_deg * geo::kPi / 180.0;
+    const double radius_m = geo::authalic_radius_m();
+
+    constexpr double light_azimuth_rad = 315.0 * geo::kPi / 180.0;
+    constexpr double light_altitude_rad = 45.0 * geo::kPi / 180.0;
+    const double light_east =
+        std::sin(light_azimuth_rad) * std::cos(light_altitude_rad);
+    const double light_north =
+        std::cos(light_azimuth_rad) * std::cos(light_altitude_rad);
+    const double light_up = std::sin(light_altitude_rad);
+
+    const auto sample = [&](const std::uint32_t x, const std::uint32_t y)
+        -> std::optional<double> {
+        const std::size_t index = static_cast<std::size_t>(y) *
+            static_cast<std::size_t>(tile.width) + static_cast<std::size_t>(x);
+        const std::int16_t value = tile.samples_m[index];
+        if (value == elevation::kNoDataMeters) return std::nullopt;
+        return static_cast<double>(value);
+    };
+
+    for (std::uint32_t y = 0U; y < tile.height; ++y) {
+        auto* pixels = reinterpret_cast<QRgb*>(image.scanLine(static_cast<int>(y)));
+        const std::uint32_t north_y = y == 0U ? y : y - 1U;
+        const std::uint32_t south_y = y + 1U < tile.height ? y + 1U : y;
+        const double latitude_deg = north_deg -
+            (static_cast<double>(y) + 0.5) * lat_step_deg;
+        const double cos_latitude = std::max(
+            1e-6,
+            std::abs(std::cos(latitude_deg * geo::kPi / 180.0))
+        );
+        const double east_west_m = radius_m * step_rad * cos_latitude;
+        const double north_south_m = radius_m * step_rad;
+
+        for (std::uint32_t x = 0U; x < tile.width; ++x) {
+            const auto center = sample(x, y);
+            if (!center.has_value()) {
+                pixels[x] = qRgba(0, 0, 0, 0);
+                continue;
+            }
+
+            const std::uint32_t west_x = x == 0U ? tile.width - 1U : x - 1U;
+            const std::uint32_t east_x = x + 1U < tile.width ? x + 1U : 0U;
+            const auto west = sample(west_x, y);
+            const auto east = sample(east_x, y);
+            const auto north = sample(x, north_y);
+            const auto south = sample(x, south_y);
+
+            double illumination = light_up;
+            if (west && east && north && south &&
+                east_west_m > 0.0 && north_south_m > 0.0) {
+                const double dz_east = (*east - *west) / (2.0 * east_west_m);
+                const double dz_north = (*north - *south) / (2.0 * north_south_m);
+                const double normal_east = -dz_east;
+                const double normal_north = -dz_north;
+                const double normal_up = 1.0;
+                const double normal_length = std::sqrt(
+                    normal_east * normal_east +
+                    normal_north * normal_north +
+                    normal_up * normal_up
+                );
+                if (normal_length > 0.0 && std::isfinite(normal_length)) {
+                    illumination =
+                        (normal_east * light_east +
+                         normal_north * light_north +
+                         normal_up * light_up) /
+                        normal_length;
+                }
+            }
+
+            const double shade = std::clamp(
+                0.62 + 0.58 * std::max(0.0, illumination),
+                0.62,
+                1.20
+            );
+            const Rgb base = hypsometric_color(*center);
+            const auto channel = [&](const double value) noexcept {
+                return static_cast<int>(std::lround(std::clamp(value * shade, 0.0, 255.0)));
+            };
+            pixels[x] = qRgba(
+                channel(base.r),
+                channel(base.g),
+                channel(base.b),
+                255
+            );
+        }
+    }
+    return image;
 }
 
 }  // namespace
@@ -149,6 +336,15 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
                     };
                 }
                 resource->elevation_tile = std::move(*decoded.tile);
+                resource->elevation_preview_image =
+                    build_elevation_preview(*resource->elevation_tile);
+                if (resource->elevation_preview_image.isNull()) {
+                    return {
+                        nullptr,
+                        "embedded elevation resource could not build presentation overview: " +
+                            resource_id,
+                    };
+                }
                 // The decoded tile is canonical render state. Do not retain a
                 // second in-memory copy of the serialized numerical payload.
                 resource->bytes.clear();
