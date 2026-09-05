@@ -7,6 +7,7 @@
 #include "map_workspace_view.hpp"
 
 #include "aeris/storage/layer.hpp"
+#include "aeris/view/projection_catalog.hpp"
 
 #include <QAction>
 #include <QComboBox>
@@ -172,10 +173,12 @@ void MainWindow::build_ui() {
     unfold_layout->addWidget(explanation);
 
     projection_combo_ = new QComboBox(unfold_widget);
-    projection_combo_->addItem(
-        QStringLiteral("Sinu-Mollweide"),
-        static_cast<int>(view::SurfaceMode::sinu_mollweide)
-    );
+    for (const auto& descriptor : view::projection_catalog()) {
+        projection_combo_->addItem(
+            QString::fromLatin1(descriptor.display_name),
+            static_cast<int>(descriptor.mode)
+        );
+    }
     connect(
         projection_combo_,
         &QComboBox::currentIndexChanged,
