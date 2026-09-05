@@ -5,11 +5,13 @@
 
 #include "map_view.hpp"
 #include "map_workspace_view.hpp"
+#include "world_data_import.hpp"
 
 #include "aeris/storage/layer.hpp"
 #include "aeris/view/projection_catalog.hpp"
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDockWidget>
@@ -59,6 +61,13 @@ QLabel* selectable_value(QWidget* parent) {
     return QFile(path).fileName();
 }
 
+[[nodiscard]] QString ensure_aeris_suffix(QString path) {
+    if (!path.endsWith(QStringLiteral(".aeris"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".aeris");
+    }
+    return path;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -104,6 +113,10 @@ void MainWindow::build_ui() {
     setCentralWidget(map_view_);
 
     auto* file_menu = menuBar()->addMenu(QStringLiteral("&File"));
+    auto* new_action = file_menu->addAction(QStringLiteral("&New project…"));
+    new_action->setShortcut(QKeySequence::New);
+    connect(new_action, &QAction::triggered, this, &MainWindow::new_project);
+
     auto* open_action = file_menu->addAction(QStringLiteral("&Open project…"));
     open_action->setShortcut(QKeySequence::Open);
     connect(open_action, &QAction::triggered, this, &MainWindow::open_project);
@@ -116,6 +129,20 @@ void MainWindow::build_ui() {
     auto* exit_action = file_menu->addAction(QStringLiteral("E&xit"));
     exit_action->setShortcut(QKeySequence::Quit);
     connect(exit_action, &QAction::triggered, this, &QWidget::close);
+
+    auto* data_menu = menuBar()->addMenu(QStringLiteral("&Data"));
+    import_world_data_action_ = data_menu->addAction(
+        QStringLiteral("Import downloaded Natural Earth world…")
+    );
+    import_world_data_action_->setToolTip(QStringLiteral(
+        "Import separately downloaded exact Natural Earth v5.1.2 110m files into the current .aeris project"
+    ));
+    connect(
+        import_world_data_action_,
+        &QAction::triggered,
+        this,
+        &MainWindow::import_world_data
+    );
 
     auto* tools_menu = menuBar()->addMenu(QStringLiteral("&Tools"));
     auto* navigate_action = tools_menu->addAction(QStringLiteral("Navigate"));
@@ -148,6 +175,7 @@ void MainWindow::build_ui() {
     toolbar->setObjectName(QStringLiteral("mapTools"));
     toolbar->setMovable(false);
     toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toolbar->addAction(new_action);
     toolbar->addAction(open_action);
     toolbar->addSeparator();
     toolbar->addAction(navigate_action);
@@ -329,6 +357,77 @@ void MainWindow::apply_theme() {
     )"));
 }
 
+void MainWindow::new_project() {
+    QString selected = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("Create AERIS project"),
+        QStringLiteral("world.aeris"),
+        QStringLiteral("AERIS projects (*.aeris);;All files (*)")
+    );
+    if (selected.isEmpty()) return;
+    selected = ensure_aeris_suffix(std::move(selected));
+
+    const std::filesystem::path path = filesystem_path_from_qt(selected);
+    std::error_code exists_error;
+    if (std::filesystem::exists(path, exists_error)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("AERIS project already exists"),
+            QStringLiteral("Choose a new project path. Existing .aeris files are never overwritten by New Project.")
+        );
+        return;
+    }
+    if (exists_error) {
+        QMessageBox::critical(
+            this,
+            QStringLiteral("AERIS project create failed"),
+            QString::fromStdString(exists_error.message())
+        );
+        return;
+    }
+
+    storage::ProjectCreateOptions options{};
+    options.timestamp_utc = utc_now();
+    options.producer = "aeris-desktop";
+    options.producer_version = "0.1.0";
+    storage::ProjectStoreResult created = storage::ProjectStore::create(path, options);
+    if (!created.ok()) {
+        QMessageBox::critical(
+            this,
+            QStringLiteral("AERIS project create failed"),
+            QString::fromStdString(created.status.diagnostic)
+        );
+        return;
+    }
+
+    const storage::Status integrity = created.store->verify_integrity();
+    if (!integrity.ok()) {
+        QMessageBox::critical(
+            this,
+            QStringLiteral("AERIS project verification failed"),
+            QString::fromStdString(integrity.diagnostic)
+        );
+        return;
+    }
+
+    scene_controller_.cancel();
+    project_ = std::move(created.store);
+    if (!load_render_model()) {
+        project_.reset();
+        model_.reset();
+        scene_controller_.set_model(nullptr);
+        map_view_->clear_project();
+        refresh_project_ui();
+        return;
+    }
+
+    refresh_project_ui();
+    statusBar()->showMessage(
+        QStringLiteral("Empty durable .aeris project created · add data from the Data menu"),
+        6000
+    );
+}
+
 void MainWindow::open_project() {
     const QString selected = QFileDialog::getOpenFileName(
         this,
@@ -338,7 +437,7 @@ void MainWindow::open_project() {
     );
     if (selected.isEmpty()) return;
 
-    auto opened = aeris::storage::ProjectStore::open(filesystem_path_from_qt(selected));
+    auto opened = storage::ProjectStore::open(filesystem_path_from_qt(selected));
     if (!opened.ok()) {
         QMessageBox::critical(
             this,
@@ -348,6 +447,7 @@ void MainWindow::open_project() {
         return;
     }
 
+    scene_controller_.cancel();
     project_ = std::move(opened.store);
     if (!load_render_model()) {
         project_.reset();
@@ -372,6 +472,57 @@ void MainWindow::close_project() {
     rebuild_layer_tree();
     refresh_project_ui();
     statusBar()->showMessage(QStringLiteral("Project closed"), 2000);
+}
+
+void MainWindow::import_world_data() {
+    if (!project_) return;
+    if (project_->metadata().frozen) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Project is frozen"),
+            QStringLiteral("Thaw or copy the project before adding external datasets.")
+        );
+        return;
+    }
+
+    const QString selected = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("Select downloaded Natural Earth v5.1.2 110m directory")
+    );
+    if (selected.isEmpty()) return;
+
+    statusBar()->showMessage(QStringLiteral("Verifying and importing world data into .aeris…"));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const WorldDataImportResult imported = import_natural_earth_110m_world(
+        *project_,
+        filesystem_path_from_qt(selected),
+        utc_now()
+    );
+    QApplication::restoreOverrideCursor();
+
+    if (!imported.ok()) {
+        if (imported.changed) {
+            project_->refresh_metadata();
+            load_render_model();
+            refresh_project_ui();
+        }
+        QMessageBox::critical(
+            this,
+            QStringLiteral("World data import failed"),
+            QString::fromStdString(imported.diagnostic)
+        );
+        return;
+    }
+
+    if (!load_render_model()) return;
+    refresh_project_ui();
+    layers_dock_->show();
+    statusBar()->showMessage(
+        imported.changed
+            ? QStringLiteral("World data committed to .aeris · source directory is no longer required for rendering")
+            : QStringLiteral("World data is already present in this project"),
+        6500
+    );
 }
 
 bool MainWindow::load_render_model() {
@@ -471,22 +622,27 @@ void MainWindow::apply_selected_projection() {
 
 void MainWindow::refresh_unfold_controls() {
     const bool has_project = project_ != nullptr;
-    const bool on_globe = has_project &&
+    const bool has_map_data = has_project && model_ && !model_->sources.empty();
+    const bool on_globe = has_map_data &&
         map_view_->surface_mode() == view::SurfaceMode::globe;
 
     projection_combo_->setEnabled(on_globe);
     cut_slider_->setEnabled(on_globe);
     cut_value_label_->setEnabled(on_globe);
     apply_projection_button_->setEnabled(on_globe);
-    return_globe_button_->setEnabled(has_project && !on_globe);
+    return_globe_button_->setEnabled(has_map_data && !on_globe);
 }
 
 void MainWindow::refresh_project_ui() {
     const bool has_project = project_ != nullptr;
+    const bool has_map_data = has_project && model_ && !model_->sources.empty();
     close_project_action_->setEnabled(has_project);
-    zoom_in_action_->setEnabled(has_project);
-    zoom_out_action_->setEnabled(has_project);
-    reset_view_action_->setEnabled(has_project);
+    import_world_data_action_->setEnabled(
+        has_project && !project_->metadata().frozen
+    );
+    zoom_in_action_->setEnabled(has_map_data);
+    zoom_out_action_->setEnabled(has_map_data);
+    reset_view_action_->setEnabled(has_map_data);
     refresh_unfold_controls();
 
     if (!project_) {
@@ -509,7 +665,12 @@ void MainWindow::refresh_project_ui() {
             .arg(metadata.format_minor)
     );
     project_projection_value_->setText(QString::fromStdString(metadata.projection_id));
-    project_state_value_->setText(metadata.frozen ? QStringLiteral("Frozen") : QStringLiteral("Editable"));
+    project_state_value_->setText(
+        metadata.frozen
+            ? QStringLiteral("Frozen")
+            : (has_map_data ? QStringLiteral("Editable · world data")
+                            : QStringLiteral("Editable · empty"))
+    );
 }
 
 }  // namespace aeris::desktop
