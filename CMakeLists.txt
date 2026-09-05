@@ -35,8 +35,11 @@ add_executable(aeris-desktop
     src/flag_pack_import.hpp
     src/flag_renderer.cpp
     src/flag_renderer.hpp
+    src/flag_ui.cpp
+    src/flag_ui.hpp
     src/main.cpp
     src/main_window.cpp
+    src/main_window_flags.cpp
     src/main_window.hpp
     src/map_view.cpp
     src/map_view.hpp
