@@ -29,9 +29,10 @@ class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
-    // Public UI command so optional data-pack integrations can add themselves to
-    // the Data menu without taking ownership of project/storage internals.
+    // Public UI commands so optional data-pack integrations can add themselves
+    // to the Data menu without taking ownership of project/storage internals.
     void import_country_flags();
+    void import_etopo_elevation();
 
 private:
     void build_ui();
