@@ -9,7 +9,6 @@
 #include "aeris/util/sha256.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <set>
@@ -45,13 +44,19 @@ struct FlagInput final {
     return value;
 }
 
+[[nodiscard]] std::string ascii_upper(std::string value) {
+    for (char& c : value) {
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    }
+    return value;
+}
+
 [[nodiscard]] bool iso_alpha2(const std::string& value) noexcept {
     if (value.size() != 2U) return false;
-    for (const unsigned char c : value) {
-        if (!((c >= static_cast<unsigned char>('A') && c <= static_cast<unsigned char>('Z')) ||
-              (c >= static_cast<unsigned char>('a') && c <= static_cast<unsigned char>('z')))) {
-            return false;
-        }
+    for (const char c : value) {
+        const bool upper = c >= 'A' && c <= 'Z';
+        const bool lower = c >= 'a' && c <= 'z';
+        if (!upper && !lower) return false;
     }
     return true;
 }
@@ -66,11 +71,11 @@ struct FlagInput final {
     return nullptr;
 }
 
-[[nodiscard]] std::filesystem::path resolve_svg_root(
+[[nodiscard]] std::filesystem::path resolve_png_root(
     const std::filesystem::path& pack_root
 ) {
     std::error_code error;
-    const std::filesystem::path nested = pack_root / "svg";
+    const std::filesystem::path nested = pack_root / "png" / "256";
     if (std::filesystem::is_directory(nested, error) && !error) return nested;
     return pack_root;
 }
@@ -103,22 +108,24 @@ struct FlagInput final {
     }
 
     std::size_t insert_at = 0U;
-    for (std::size_t index = 0U; index < layers.size(); ++index) {
-        if (layers[index].role_id == storage::kLayerRoleCountryLabelV1) {
-            const auto found = std::find(order.begin(), order.end(), layers[index].layer_id);
-            if (found != order.end()) {
-                insert_at = static_cast<std::size_t>(std::distance(order.begin(), found)) + 1U;
-            }
-            break;
+    for (const storage::ProjectLayerRecord& layer : layers) {
+        if (layer.role_id != storage::kLayerRoleCountryLabelV1) continue;
+        const auto found = std::find(order.begin(), order.end(), layer.layer_id);
+        if (found != order.end()) {
+            insert_at = static_cast<std::size_t>(std::distance(order.begin(), found)) + 1U;
         }
+        break;
     }
-    order.insert(order.begin() + static_cast<std::ptrdiff_t>(insert_at), std::string(kFlagLayerId));
+    order.insert(
+        order.begin() + static_cast<std::ptrdiff_t>(insert_at),
+        std::string(kFlagLayerId)
+    );
     return order;
 }
 
 }  // namespace
 
-FlagPackImportResult import_country_flag_svg_pack(
+FlagPackImportResult import_country_flag_png_pack(
     storage::ProjectStore& project,
     const std::filesystem::path& pack_root,
     const std::string_view modified_utc
@@ -168,18 +175,24 @@ FlagPackImportResult import_country_flag_svg_pack(
         return failure(false, 0U, "flag pack exceeds the current 256-resource layer bound");
     }
 
-    const std::filesystem::path svg_root = resolve_svg_root(pack_root);
+    const std::filesystem::path png_root = resolve_png_root(pack_root);
     std::vector<FlagInput> inputs;
     inputs.reserve(codes.size());
     for (const std::string& code : codes) {
-        const std::filesystem::path path = svg_root / (code + ".svg");
+        const std::string filename = ascii_upper(code) + ".png";
+        std::filesystem::path path = png_root / filename;
         std::error_code error;
-        const std::uintmax_t size = std::filesystem::file_size(path, error);
+        std::uintmax_t size = std::filesystem::file_size(path, error);
+        if (error || size == 0U) {
+            error.clear();
+            path = png_root / (code + ".png");
+            size = std::filesystem::file_size(path, error);
+        }
         if (error || size == 0U) {
             return failure(
                 false,
                 0U,
-                "flag pack is incomplete: missing or empty " + path.filename().string()
+                "flag pack is incomplete: missing or empty " + filename
             );
         }
         const util::Sha256FileResult hash = util::sha256_file(path);
@@ -190,7 +203,7 @@ FlagPackImportResult import_country_flag_svg_pack(
         storage::ProjectResourceIdentity identity{};
         identity.resource_id = std::string(kFlagResourcePrefix) + code;
         identity.sha256 = hash.digest.hex();
-        identity.media_type = "image/svg+xml";
+        identity.media_type = "image/png";
         identity.size_bytes = static_cast<std::uint64_t>(size);
         identity.required_for_reproduction = true;
         inputs.push_back({code, path, std::move(identity)});
@@ -280,7 +293,7 @@ FlagPackImportResult import_country_flag_svg_pack(
         changed,
         embedded_count,
         changed
-            ? "country flag SVG pack embedded into durable .aeris storage"
+            ? "country flag PNG pack embedded into durable .aeris storage"
             : "country flag pack already present",
     };
 }
