@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
 #include <QMessageBox>
