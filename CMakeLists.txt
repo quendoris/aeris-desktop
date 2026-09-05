@@ -91,12 +91,37 @@ target_link_libraries(aeris-desktop-render-probe PRIVATE
 target_compile_features(aeris-desktop-render-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-render-probe PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-projection-catalog-probe
+    dev/projection_catalog_probe.cpp
+    src/map_view.cpp
+    src/map_view.hpp
+    src/map_view_projection.cpp
+    src/map_workspace_view.cpp
+    src/map_workspace_view.hpp
+    src/project_model.cpp
+    src/project_model.hpp
+)
+target_include_directories(aeris-desktop-projection-catalog-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-projection-catalog-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Widgets
+)
+target_compile_features(aeris-desktop-projection-catalog-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 if(MSVC)
     target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
