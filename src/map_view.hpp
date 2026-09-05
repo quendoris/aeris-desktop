@@ -79,6 +79,16 @@ public:
     [[nodiscard]] QPointF viewport_pan() const noexcept { return viewport_pan_; }
 
 protected:
+    // Workspace overlays may compose presentation from the exact durable model
+    // and frame already rendered underneath them. They are read-only views: all
+    // world geometry construction and project ownership remain in MapView/core.
+    [[nodiscard]] const ProjectModel* current_project_model() const noexcept {
+        return model_.get();
+    }
+    [[nodiscard]] const RenderFrame* current_render_frame() const noexcept {
+        return has_current_frame() ? &frame_ : nullptr;
+    }
+
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
