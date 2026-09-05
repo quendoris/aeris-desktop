@@ -7,6 +7,8 @@
 #include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
 
+#include <QImage>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -18,6 +20,7 @@ namespace aeris::desktop {
 struct EmbeddedProjectResource final {
     std::string media_type;
     std::vector<std::uint8_t> bytes;
+    QImage raster_image;
 };
 
 struct ProjectModel final {
