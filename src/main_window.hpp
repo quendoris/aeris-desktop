@@ -32,8 +32,10 @@ public:
 private:
     void build_ui();
     void apply_theme();
+    void new_project();
     void open_project();
     void close_project();
+    void import_world_data();
     void refresh_project_ui();
     void refresh_unfold_controls();
     bool load_render_model();
@@ -58,6 +60,7 @@ private:
     QLabel* project_projection_value_{nullptr};
     QLabel* project_state_value_{nullptr};
     QAction* close_project_action_{nullptr};
+    QAction* import_world_data_action_{nullptr};
     QAction* zoom_in_action_{nullptr};
     QAction* zoom_out_action_{nullptr};
     QAction* reset_view_action_{nullptr};
