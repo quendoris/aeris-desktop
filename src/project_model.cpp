@@ -7,11 +7,25 @@
 #include "aeris/storage/resource.hpp"
 
 #include <limits>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
 namespace aeris::desktop {
+namespace {
+
+[[nodiscard]] bool eager_resource_binding(
+    const storage::ProjectLayerRecord& layer,
+    const storage::LayerResourceBinding& binding
+) noexcept {
+    if (layer.role_id != storage::kLayerRolePhysicalElevationV1) return true;
+    constexpr std::string_view overview_prefix = "overview:";
+    return binding.slot_id.size() > overview_prefix.size() &&
+        binding.slot_id.compare(0U, overview_prefix.size(), overview_prefix) == 0;
+}
+
+}  // namespace
 
 ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) {
     const storage::ProjectLayerListResult listed = storage::list_project_layers(project);
@@ -34,7 +48,9 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
             source_ids.insert(binding.source_id);
         }
         for (const storage::LayerResourceBinding& binding : layer.resources) {
-            resource_ids.insert(binding.resource_id);
+            if (eager_resource_binding(layer, binding)) {
+                resource_ids.insert(binding.resource_id);
+            }
         }
     }
 
@@ -122,6 +138,21 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
                     )) {
                     return {nullptr, "embedded PNG resource failed image decoding: " + resource_id};
                 }
+            } else if (resource->media_type == elevation::kElevationTileMediaType) {
+                elevation::ElevationTileDecodeResult decoded =
+                    elevation::decode_elevation_tile_v1(resource->bytes);
+                if (!decoded.ok()) {
+                    return {
+                        nullptr,
+                        "embedded elevation resource failed decoding '" + resource_id + "': " +
+                            decoded.diagnostic,
+                    };
+                }
+                resource->elevation_tile = std::move(*decoded.tile);
+                // The decoded tile is canonical render state. Do not retain a
+                // second in-memory copy of the serialized numerical payload.
+                resource->bytes.clear();
+                resource->bytes.shrink_to_fit();
             }
             model->resources.emplace(resource_id, std::move(resource));
         }
