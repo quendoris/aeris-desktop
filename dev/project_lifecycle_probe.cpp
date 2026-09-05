@@ -6,14 +6,19 @@
 
 #include "aeris/storage/project.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <set>
+#include <string>
 #include <string_view>
+#include <variant>
 
 namespace {
 
 constexpr std::string_view kTimestamp = "2026-09-05T11:00:00Z";
+constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
 
 int fail(const int code, const std::string& diagnostic) {
     std::cerr << "aeris_desktop_project_lifecycle_probe: FAIL " << diagnostic << '\n';
@@ -65,9 +70,36 @@ int main(const int argc, char** argv) {
         return fail(8, "world import did not expand project to 5 layers / 2 sources");
     }
 
+    const auto political = expanded.model->sources.find(std::string(kPoliticalSourceId));
+    if (political == expanded.model->sources.end() || !political->second ||
+        !political->second->feature_properties_complete) {
+        return fail(9, "durable political source is missing its complete property channel");
+    }
+
+    std::set<std::int64_t> palette_assignments;
+    for (const auto& feature : political->second->features) {
+        bool found_assignment = false;
+        for (const auto& property : feature.properties) {
+            if (property.key != "mapcolor7") continue;
+            const auto* value = std::get_if<std::int64_t>(&property.value);
+            if (value == nullptr || *value < 1 || *value > 7) {
+                return fail(10, "durable mapcolor7 property has wrong type or value");
+            }
+            palette_assignments.insert(*value);
+            found_assignment = true;
+            break;
+        }
+        if (!found_assignment) {
+            return fail(11, "durable political feature lost mapcolor7 during .aeris round-trip");
+        }
+    }
+    if (palette_assignments.size() != 7U) {
+        return fail(12, "durable political source does not retain all seven palette classes");
+    }
+
     const auto integrity = created.store->verify_integrity();
     if (!integrity.ok()) {
-        return fail(9, "expanded project integrity failed: " + integrity.diagnostic);
+        return fail(13, "expanded project integrity failed: " + integrity.diagnostic);
     }
 
     std::cout
@@ -75,6 +107,7 @@ int main(const int argc, char** argv) {
         << " empty_layers=0 empty_sources=0"
         << " expanded_layers=" << expanded.model->layers.size()
         << " expanded_sources=" << expanded.model->sources.size()
+        << " political_palette_classes=" << palette_assignments.size()
         << " revision=" << created.store->metadata().revision
         << '\n';
     return EXIT_SUCCESS;
