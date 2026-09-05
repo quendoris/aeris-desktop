@@ -28,14 +28,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: quendoris/aeris-core
-          ref: 7b7cee6256684fcead653db4fbe04e796dacad80
+          ref: 533b5af0ed8d641c2517136009bd20e298d636c4
           path: aeris-core
 
       - name: Record exact core dependency
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C aeris-core rev-parse HEAD)" = "7b7cee6256684fcead653db4fbe04e796dacad80"
+          test "$(git -C aeris-core rev-parse HEAD)" = "533b5af0ed8d641c2517136009bd20e298d636c4"
           git -C aeris-core log -1 --format='AERIS core: %H %s'
 
       - name: Install dependencies
@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qt6-base-dev libsqlite3-dev
+          sudo apt-get install -y --no-install-recommends qt6-base-dev libsqlite3-dev libtiff-dev
 
       - name: Configure
         run: >-
@@ -54,8 +54,11 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-elevation-tiff-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
+
+      - name: Prove compressed Float32 TIFF acquisition
+        run: ./build/aeris-desktop-elevation-tiff-probe
 
       - name: Fetch exact pinned Natural Earth world pack
         run: >-
