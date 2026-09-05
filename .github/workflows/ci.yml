@@ -28,14 +28,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: quendoris/aeris-core
-          ref: 8591bc91ad266e3a1abb942698b960e6bdacf196
+          ref: 7b7cee6256684fcead653db4fbe04e796dacad80
           path: aeris-core
 
       - name: Record exact core dependency
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C aeris-core rev-parse HEAD)" = "8591bc91ad266e3a1abb942698b960e6bdacf196"
+          test "$(git -C aeris-core rev-parse HEAD)" = "7b7cee6256684fcead653db4fbe04e796dacad80"
           git -C aeris-core log -1 --format='AERIS core: %H %s'
 
       - name: Install dependencies
@@ -57,21 +57,36 @@ jobs:
           --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
 
-      - name: Fetch exact pinned demo sources
+      - name: Fetch exact pinned Natural Earth world pack
         run: >-
           cmake
           -DDESTINATION=${{ runner.temp }}/natural-earth-v5.1.2
           -P aeris-core/scripts/fetch_demo_world.cmake
 
-      - name: Prove empty project creation and data-driven expansion
+      - name: Fetch exact optional country flag pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${{ runner.temp }}/country-flags"
+          git clone --quiet --no-checkout https://github.com/emcrisostomo/flags.git "$root"
+          git -C "$root" checkout --quiet 91286fe015b4957b51bc470eca4b5fd6f5ac90da
+          test "$(git -C "$root" rev-parse HEAD)" = "91286fe015b4957b51bc470eca4b5fd6f5ac90da"
+          test -s "$root/png/256/US.png"
+          test -s "$root/png/256/RU.png"
+
+      - name: Prove empty project and data-driven durable expansion
         run: >-
           ./build/aeris-desktop-project-lifecycle-probe
           ${{ runner.temp }}/natural-earth-v5.1.2
+          ${{ runner.temp }}/country-flags
           ${{ runner.temp }}/desktop-demo.aeris
 
-      - name: Remove acquisition sources
+      - name: Remove all acquisition packs
         shell: bash
-        run: rm -rf ${{ runner.temp }}/natural-earth-v5.1.2
+        run: |
+          rm -rf \
+            ${{ runner.temp }}/natural-earth-v5.1.2 \
+            ${{ runner.temp }}/country-flags
 
       - name: Prove all catalog projections from aeris only
         env:
