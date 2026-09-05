@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 set(AERIS_CORE_SOURCE_DIR "" CACHE PATH "Path to a local aeris-core checkout")
 if(NOT AERIS_CORE_SOURCE_DIR)
@@ -31,6 +31,10 @@ set(AERIS_BUILD_PROJECT ON CACHE BOOL "" FORCE)
 add_subdirectory("${AERIS_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/aeris-core")
 
 add_executable(aeris-desktop
+    src/flag_pack_import.cpp
+    src/flag_pack_import.hpp
+    src/flag_renderer.cpp
+    src/flag_renderer.hpp
     src/main.cpp
     src/main_window.cpp
     src/main_window.hpp
@@ -52,6 +56,7 @@ target_link_libraries(aeris-desktop PRIVATE
     AERIS::storage
     AERIS::project
     Qt6::Core
+    Qt6::Gui
     Qt6::Widgets
 )
 target_compile_features(aeris-desktop PRIVATE cxx_std_17)
@@ -72,6 +77,8 @@ set_target_properties(aeris-demo-project PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(aeris-desktop-project-lifecycle-probe
     dev/project_lifecycle_probe.cpp
+    src/flag_pack_import.cpp
+    src/flag_pack_import.hpp
     src/project_model.cpp
     src/project_model.hpp
     src/world_data_import.cpp
@@ -84,12 +91,15 @@ target_link_libraries(aeris-desktop-project-lifecycle-probe PRIVATE
     AERIS::core
     AERIS::storage
     AERIS::project
+    Qt6::Gui
 )
 target_compile_features(aeris-desktop-project-lifecycle-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-project-lifecycle-probe PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(aeris-desktop-render-probe
     dev/render_project.cpp
+    src/flag_renderer.cpp
+    src/flag_renderer.hpp
     src/map_view.cpp
     src/map_view.hpp
     src/map_view_projection.cpp
@@ -106,6 +116,7 @@ target_link_libraries(aeris-desktop-render-probe PRIVATE
     AERIS::storage
     AERIS::project
     Qt6::Core
+    Qt6::Gui
     Qt6::Widgets
 )
 target_compile_features(aeris-desktop-render-probe PRIVATE cxx_std_17)
@@ -113,6 +124,8 @@ set_target_properties(aeris-desktop-render-probe PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(aeris-desktop-projection-catalog-probe
     dev/projection_catalog_probe.cpp
+    src/flag_renderer.cpp
+    src/flag_renderer.hpp
     src/map_view.cpp
     src/map_view.hpp
     src/map_view_projection.cpp
@@ -129,6 +142,7 @@ target_link_libraries(aeris-desktop-projection-catalog-probe PRIVATE
     AERIS::storage
     AERIS::project
     Qt6::Core
+    Qt6::Gui
     Qt6::Widgets
 )
 target_compile_features(aeris-desktop-projection-catalog-probe PRIVATE cxx_std_17)
