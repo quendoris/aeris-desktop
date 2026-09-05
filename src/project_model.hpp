@@ -23,6 +23,9 @@ struct EmbeddedProjectResource final {
     std::vector<std::uint8_t> bytes;
     QImage raster_image;
     std::optional<elevation::ElevationTile> elevation_tile;
+    // Rebuildable frontend presentation derived from numerical elevation. It is
+    // never serialized back into .aeris and may change with cartographic style.
+    QImage elevation_preview_image;
 };
 
 struct ProjectModel final {
