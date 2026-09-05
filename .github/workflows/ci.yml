@@ -28,14 +28,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: quendoris/aeris-core
-          ref: d761a8b923744b9bbd377ee7173bfb2b5e046f1d
+          ref: 8591bc91ad266e3a1abb942698b960e6bdacf196
           path: aeris-core
 
       - name: Record exact core dependency
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C aeris-core rev-parse HEAD)" = "d761a8b923744b9bbd377ee7173bfb2b5e046f1d"
+          test "$(git -C aeris-core rev-parse HEAD)" = "8591bc91ad266e3a1abb942698b960e6bdacf196"
           git -C aeris-core log -1 --format='AERIS core: %H %s'
 
       - name: Install dependencies
