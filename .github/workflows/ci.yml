@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: 2026 quendoris
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Desktop CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: desktop-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-build:
+    name: Ubuntu / Qt6 desktop
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout desktop
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout exact AERIS core
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: quendoris/aeris-core
+          ref: 533b5af0ed8d641c2517136009bd20e298d636c4
+          path: aeris-core
+
+      - name: Record exact core dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C aeris-core rev-parse HEAD)" = "533b5af0ed8d641c2517136009bd20e298d636c4"
+          git -C aeris-core log -1 --format='AERIS core: %H %s'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-base-dev libsqlite3-dev libtiff-dev
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DAERIS_CORE_SOURCE_DIR=${{ github.workspace }}/aeris-core
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build desktop and proof tools
+        run: >-
+          cmake --build build
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-elevation-tiff-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --parallel 2
+
+      - name: Prove compressed Float32 TIFF acquisition
+        run: ./build/aeris-desktop-elevation-tiff-probe
+
+      - name: Fetch exact pinned Natural Earth world pack
+        run: >-
+          cmake
+          -DDESTINATION=${{ runner.temp }}/natural-earth-v5.1.2
+          -P aeris-core/scripts/fetch_demo_world.cmake
+
+      - name: Fetch exact optional country flag pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${{ runner.temp }}/country-flags"
+          git clone --quiet --no-checkout https://github.com/emcrisostomo/flags.git "$root"
+          git -C "$root" checkout --quiet 91286fe015b4957b51bc470eca4b5fd6f5ac90da
+          test "$(git -C "$root" rev-parse HEAD)" = "91286fe015b4957b51bc470eca4b5fd6f5ac90da"
+          test -s "$root/png/256/US.png"
+          test -s "$root/png/256/RU.png"
+
+      - name: Prove empty project and data-driven durable expansion
+        run: >-
+          ./build/aeris-desktop-project-lifecycle-probe
+          ${{ runner.temp }}/natural-earth-v5.1.2
+          ${{ runner.temp }}/country-flags
+          ${{ runner.temp }}/desktop-demo.aeris
+
+      - name: Remove all acquisition packs
+        shell: bash
+        run: |
+          rm -rf \
+            ${{ runner.temp }}/natural-earth-v5.1.2 \
+            ${{ runner.temp }}/country-flags
+
+      - name: Prove all catalog projections from aeris only
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build/aeris-desktop-projection-catalog-probe
+          ${{ runner.temp }}/desktop-demo.aeris
+
+      - name: Render desktop from aeris only
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          ./build/aeris-desktop-render-probe
+          ${{ runner.temp }}/desktop-demo.aeris
+          ${{ runner.temp }}/desktop-demo.png
+          ${{ runner.temp }}/desktop-seam.png
+
+      - name: Prove durable project and renders exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ${{ runner.temp }}/desktop-demo.aeris
+          test -s ${{ runner.temp }}/desktop-demo.png
+          test -s ${{ runner.temp }}/desktop-seam.png
+          ls -lh \
+            ${{ runner.temp }}/desktop-demo.aeris \
+            ${{ runner.temp }}/desktop-demo.png \
+            ${{ runner.temp }}/desktop-seam.png
+
+      - name: Upload desktop proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeris-desktop-proof
+          path: |
+            ${{ runner.temp }}/desktop-demo.aeris
+            ${{ runner.temp }}/desktop-demo.png
+            ${{ runner.temp }}/desktop-seam.png
+          if-no-files-found: error
+          retention-days: 14
