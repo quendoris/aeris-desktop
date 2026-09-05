@@ -7,6 +7,7 @@
 #include "aeris/project/world_layers.hpp"
 #include "aeris/source/acquisition.hpp"
 #include "aeris/source/natural_earth.hpp"
+#include "aeris/source/natural_earth_cartography.hpp"
 #include "aeris/source/registry.hpp"
 #include "aeris/util/sha256.hpp"
 
@@ -157,7 +158,7 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
 
 [[nodiscard]] source::SourceBinding admin0_binding() {
     source::SourceBinding binding{};
-    binding.adapter_id = "natural-earth.ne-110m-admin0-countries.shapefile-dbf.v1";
+    binding.adapter_id = "natural-earth.ne-110m-admin0-cartography.shapefile-dbf.v1";
     binding.capability = source::Capability::admin0;
     binding.snapshot = std::string(kSnapshot);
     binding.worldview = "natural-earth.de-facto";
@@ -210,7 +211,7 @@ WorldDataImportResult import_natural_earth_110m_world(
     source::AdapterRegistry registry{};
     if (registry.add(std::make_unique<source::NaturalEarthLand110mAdapter>()) !=
             source::RegistryError::none ||
-        registry.add(std::make_unique<source::NaturalEarthAdmin0Countries110mAdapter>()) !=
+        registry.add(std::make_unique<source::NaturalEarthAdmin0Cartography110mAdapter>()) !=
             source::RegistryError::none) {
         return failure("could not register built-in Natural Earth adapters");
     }
@@ -250,7 +251,7 @@ WorldDataImportResult import_natural_earth_110m_world(
         return {
             false,
             changed || admin.inserted || admin.durably_committed,
-            "Natural Earth admin0 import failed: " + admin.diagnostic,
+            "Natural Earth admin0 cartography import failed: " + admin.diagnostic,
         };
     }
     changed = changed || admin.inserted;
@@ -282,7 +283,7 @@ WorldDataImportResult import_natural_earth_110m_world(
         true,
         changed,
         changed
-            ? "verified Natural Earth world imported into durable .aeris storage"
+            ? "verified Natural Earth world + cartographic palette imported into durable .aeris storage"
             : "verified Natural Earth world already present",
     };
 }
