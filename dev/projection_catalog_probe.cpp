@@ -18,11 +18,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace {
 
