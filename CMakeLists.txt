@@ -43,6 +43,8 @@ add_executable(aeris-desktop
     src/project_model.hpp
     src/scene_controller.cpp
     src/scene_controller.hpp
+    src/world_data_import.cpp
+    src/world_data_import.hpp
 )
 
 target_link_libraries(aeris-desktop PRIVATE
