@@ -7,6 +7,7 @@
 #include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -14,9 +15,15 @@
 
 namespace aeris::desktop {
 
+struct EmbeddedProjectResource final {
+    std::string media_type;
+    std::vector<std::uint8_t> bytes;
+};
+
 struct ProjectModel final {
     std::vector<storage::ProjectLayerRecord> layers;
     std::unordered_map<std::string, std::shared_ptr<const source::Result>> sources;
+    std::unordered_map<std::string, std::shared_ptr<const EmbeddedProjectResource>> resources;
 };
 
 struct ProjectModelLoadResult final {
