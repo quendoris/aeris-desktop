@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 quendoris
 // SPDX-License-Identifier: AGPL-3.0-only
-
 #pragma once
 
+#include "aeris/elevation/grid.hpp"
 #include "aeris/source/adapter.hpp"
 #include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +22,7 @@ struct EmbeddedProjectResource final {
     std::string media_type;
     std::vector<std::uint8_t> bytes;
     QImage raster_image;
+    std::optional<elevation::ElevationTile> elevation_tile;
 };
 
 struct ProjectModel final {
