@@ -70,6 +70,24 @@ target_link_libraries(aeris-demo-project PRIVATE
 target_compile_features(aeris-demo-project PRIVATE cxx_std_17)
 set_target_properties(aeris-demo-project PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-project-lifecycle-probe
+    dev/project_lifecycle_probe.cpp
+    src/project_model.cpp
+    src/project_model.hpp
+    src/world_data_import.cpp
+    src/world_data_import.hpp
+)
+target_include_directories(aeris-desktop-project-lifecycle-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-project-lifecycle-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+)
+target_compile_features(aeris-desktop-project-lifecycle-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-project-lifecycle-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 add_executable(aeris-desktop-render-probe
     dev/render_project.cpp
     src/map_view.cpp
@@ -119,11 +137,13 @@ set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTE
 if(MSVC)
     target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
