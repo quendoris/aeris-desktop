@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -87,6 +88,30 @@ namespace {
         inside(rect.bottomLeft()) && inside(rect.bottomRight());
 }
 
+[[nodiscard]] std::size_t symbol_budget(
+    const QPainter& painter,
+    const view::SceneGeometry& scene,
+    const double device_area_scale,
+    const bool globe
+) noexcept {
+    const double span_x = std::max(0.0, scene.max_x - scene.min_x);
+    const double span_y = std::max(0.0, scene.max_y - scene.min_y);
+    const double scene_device_area = span_x * span_y * device_area_scale;
+    const QRect viewport = painter.viewport();
+    const double viewport_area = std::max(
+        1.0,
+        static_cast<double>(viewport.width()) * static_cast<double>(viewport.height())
+    );
+
+    // At a fitted whole-world view the transformed scene occupies roughly one
+    // viewport. When the user zooms, this ratio grows approximately with zoom²,
+    // so its square root is a renderer-independent screen-detail scale.
+    const double detail_scale = std::sqrt(std::max(1.0, scene_device_area / viewport_area));
+    const double base_budget = globe ? 12.0 : 16.0;
+    const auto budget = static_cast<std::size_t>(std::lround(base_budget * detail_scale));
+    return std::clamp<std::size_t>(budget, globe ? 12U : 16U, 80U);
+}
+
 struct FlagCandidate final {
     const QImage* image{nullptr};
     QRectF rect;
@@ -134,6 +159,7 @@ void draw_country_flags(
     const QTransform world = painter.worldTransform();
     const double device_area_scale = std::abs(world.determinant());
     const bool globe = scene.mode == view::SurfaceMode::globe && scene.globe_radius_m > 0.0;
+    const std::size_t max_symbols = symbol_budget(painter, scene, device_area_scale, globe);
     QPointF globe_center{};
     double globe_radius_px = 0.0;
     if (globe) {
@@ -170,10 +196,11 @@ void draw_country_flags(
         if (!anchor.has_value()) continue;
 
         const double projected_area = largest_area * device_area_scale;
-        // This is intentionally screen-space detail selection. At whole-world
-        // scale only large countries get a symbol; zooming naturally admits
-        // smaller countries without requesting new geographic geometry.
-        if (projected_area < 700.0) continue;
+        // A flag is an annotation, not a substitute for the political fill.
+        // Require enough screen-space country area that the symbol remains a
+        // useful secondary cue instead of turning the whole-world map into an
+        // icon sheet. Zoom naturally increases projected_area quadratically.
+        if (projected_area < 2600.0) continue;
 
         const QImage& image = flag->second->raster_image;
         if (image.width() <= 0 || image.height() <= 0) continue;
@@ -222,9 +249,9 @@ void draw_country_flags(
     }
 
     std::vector<QRectF> occupied;
-    occupied.reserve(80U);
+    occupied.reserve(max_symbols);
     for (const FlagCandidate& candidate : candidates) {
-        const QRectF collision = candidate.rect.adjusted(-3.0, -3.0, 3.0, 3.0);
+        const QRectF collision = candidate.rect.adjusted(-5.0, -5.0, 5.0, 5.0);
         bool collides = false;
         for (const QRectF& used : occupied) {
             if (used.intersects(collision)) {
@@ -239,7 +266,7 @@ void draw_country_flags(
         painter.drawRoundedRect(candidate.rect.adjusted(-1.5, -1.5, 1.5, 1.5), 1.5, 1.5);
         painter.drawImage(candidate.rect, *candidate.image);
         occupied.push_back(collision);
-        if (occupied.size() >= 80U) break;
+        if (occupied.size() >= max_symbols) break;
     }
     painter.restore();
 }
