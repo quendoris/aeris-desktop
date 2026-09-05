@@ -36,6 +36,7 @@ private:
     void open_project();
     void close_project();
     void import_world_data();
+    void import_country_flags();
     void refresh_project_ui();
     void refresh_unfold_controls();
     bool load_render_model();
@@ -61,6 +62,7 @@ private:
     QLabel* project_state_value_{nullptr};
     QAction* close_project_action_{nullptr};
     QAction* import_world_data_action_{nullptr};
+    QAction* import_flags_action_{nullptr};
     QAction* zoom_in_action_{nullptr};
     QAction* zoom_out_action_{nullptr};
     QAction* reset_view_action_{nullptr};
