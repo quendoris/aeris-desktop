@@ -34,6 +34,8 @@ add_subdirectory("${AERIS_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/aeris-core")
 add_executable(aeris-desktop
     src/elevation_import.cpp
     src/elevation_import.hpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
     src/elevation_tiff.cpp
     src/elevation_tiff.hpp
     src/elevation_tiff_inspect.cpp
@@ -121,6 +123,8 @@ set_target_properties(aeris-desktop-elevation-tiff-probe PROPERTIES CXX_EXTENSIO
 
 add_executable(aeris-desktop-render-probe
     dev/render_project.cpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
     src/flag_renderer.cpp
     src/flag_renderer.hpp
     src/map_view.cpp
@@ -147,6 +151,8 @@ set_target_properties(aeris-desktop-render-probe PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(aeris-desktop-projection-catalog-probe
     dev/projection_catalog_probe.cpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
     src/flag_renderer.cpp
     src/flag_renderer.hpp
     src/map_view.cpp
