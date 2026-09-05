@@ -54,7 +54,7 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-demo-project aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
 
       - name: Fetch exact pinned demo sources
@@ -63,9 +63,9 @@ jobs:
           -DDESTINATION=${{ runner.temp }}/natural-earth-v5.1.2
           -P aeris-core/scripts/fetch_demo_world.cmake
 
-      - name: Build a real durable demo project
+      - name: Prove empty project creation and data-driven expansion
         run: >-
-          ./build/aeris-demo-project
+          ./build/aeris-desktop-project-lifecycle-probe
           ${{ runner.temp }}/natural-earth-v5.1.2
           ${{ runner.temp }}/desktop-demo.aeris
 
