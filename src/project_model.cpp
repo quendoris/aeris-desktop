@@ -6,7 +6,6 @@
 #include "aeris/project/source_reader.hpp"
 #include "aeris/storage/resource.hpp"
 
-#include <cstring>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -110,6 +109,19 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
             }
             if (resource->bytes.size() != static_cast<std::size_t>(record.identity.size_bytes)) {
                 return {nullptr, "embedded resource size changed during reconstruction: " + resource_id};
+            }
+
+            if (resource->media_type == "image/png") {
+                if (resource->bytes.empty() ||
+                    resource->bytes.size() >
+                        static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+                    !resource->raster_image.loadFromData(
+                        reinterpret_cast<const uchar*>(resource->bytes.data()),
+                        static_cast<int>(resource->bytes.size()),
+                        "PNG"
+                    )) {
+                    return {nullptr, "embedded PNG resource failed image decoding: " + resource_id};
+                }
             }
             model->resources.emplace(resource_id, std::move(resource));
         }
