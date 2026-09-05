@@ -3,7 +3,10 @@
 
 #include "map_workspace_view.hpp"
 
+#include "flag_renderer.hpp"
+
 #include "aeris/geo/wgs84.hpp"
+#include "aeris/storage/layer.hpp"
 #include "aeris/view/surface.hpp"
 
 #include <QEvent>
@@ -104,6 +107,89 @@ struct SeamSegment final {
     );
     transform.scale(base_scale * workspace.zoom_factor(), -base_scale * workspace.zoom_factor());
     return transform;
+}
+
+[[nodiscard]] QTransform map_device_transform(
+    const MapWorkspaceView& workspace,
+    const RenderFrame& frame,
+    bool& ok
+) {
+    ok = false;
+    double min_x = 0.0;
+    double min_y = 0.0;
+    double max_x = 0.0;
+    double max_y = 0.0;
+
+    if (frame.request.mode != view::SurfaceMode::globe) {
+        const view::PlanarSurfaceGeometry surface =
+            view::build_planar_surface_geometry(frame.request.mode);
+        if (!surface.ok) return {};
+        min_x = surface.min_x;
+        min_y = surface.min_y;
+        max_x = surface.max_x;
+        max_y = surface.max_y;
+    } else {
+        bool found = false;
+        for (const auto& entry : frame.source_scenes) {
+            const view::SceneGeometry& scene = entry.second;
+            if (!scene.ok) continue;
+            if (!found) {
+                min_x = scene.min_x;
+                min_y = scene.min_y;
+                max_x = scene.max_x;
+                max_y = scene.max_y;
+                found = true;
+            } else {
+                min_x = std::min(min_x, scene.min_x);
+                min_y = std::min(min_y, scene.min_y);
+                max_x = std::max(max_x, scene.max_x);
+                max_y = std::max(max_y, scene.max_y);
+            }
+        }
+        if (!found) return {};
+    }
+
+    const double span_x = max_x - min_x;
+    const double span_y = max_y - min_y;
+    if (!(span_x > 0.0) || !(span_y > 0.0)) return {};
+    const double available_width = std::max(1, workspace.width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, workspace.height() - 2 * kMapMarginPx);
+    const double base_scale = std::min(
+        available_width / span_x,
+        available_height / span_y
+    );
+    const double center_x = 0.5 * (min_x + max_x);
+    const double center_y = 0.5 * (min_y + max_y);
+
+    QTransform transform;
+    transform.translate(
+        static_cast<double>(workspace.width()) * 0.5 + workspace.viewport_pan().x(),
+        static_cast<double>(workspace.height()) * 0.5 + workspace.viewport_pan().y()
+    );
+    transform.scale(base_scale * workspace.zoom_factor(), -base_scale * workspace.zoom_factor());
+    transform.translate(-center_x, -center_y);
+    ok = true;
+    return transform;
+}
+
+void draw_flag_layers(
+    QPainter& painter,
+    const ProjectModel& model,
+    const RenderFrame& frame
+) {
+    for (auto layer_it = model.layers.rbegin(); layer_it != model.layers.rend(); ++layer_it) {
+        const storage::ProjectLayerRecord& layer = *layer_it;
+        if (!layer.visible || layer.role_id != storage::kLayerRoleCountryFlagV1) continue;
+        for (const storage::LayerSourceBinding& binding : layer.sources) {
+            const auto scene = frame.source_scenes.find(binding.source_id);
+            const auto source = model.sources.find(binding.source_id);
+            if (scene == frame.source_scenes.end() || source == model.sources.end() ||
+                !source->second) {
+                continue;
+            }
+            draw_country_flags(painter, layer, scene->second, *source->second, model);
+        }
+    }
 }
 
 [[nodiscard]] view::ProjectionSeamGeometry current_projection_seam(
@@ -211,6 +297,20 @@ void MapWorkspaceView::set_unfold_target_mode(const view::SurfaceMode mode) {
 
 void MapWorkspaceView::paintEvent(QPaintEvent* event) {
     MapView::paintEvent(event);
+
+    const ProjectModel* model = current_project_model();
+    const RenderFrame* frame = current_render_frame();
+    if (model != nullptr && frame != nullptr) {
+        bool transform_ok = false;
+        const QTransform transform = map_device_transform(*this, *frame, transform_ok);
+        if (transform_ok) {
+            QPainter flag_painter(this);
+            flag_painter.setRenderHint(QPainter::Antialiasing, true);
+            flag_painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            flag_painter.setWorldTransform(transform);
+            draw_flag_layers(flag_painter, *model, *frame);
+        }
+    }
 
     if (!cut_tool_can_interact(*this)) return;
 
