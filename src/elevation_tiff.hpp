@@ -14,6 +14,15 @@ struct Float32TiffInfo final {
     std::uint32_t width{0U};
     std::uint32_t height{0U};
     std::uint16_t compression{0U};
+    bool tiled{false};
+};
+
+struct Float32TiffInspectResult final {
+    bool success{false};
+    Float32TiffInfo info{};
+    std::string diagnostic;
+
+    [[nodiscard]] bool ok() const noexcept { return success; }
 };
 
 using Float32TiffRowConsumer = std::function<bool(
@@ -30,6 +39,10 @@ struct Float32TiffReadResult final {
 
     [[nodiscard]] bool ok() const noexcept { return success; }
 };
+
+// Performs the cheap structural pass before any durable import begins.
+[[nodiscard]] Float32TiffInspectResult inspect_single_band_float32_tiff(
+    const std::filesystem::path& path);
 
 // Reads a single-band, top-left oriented IEEE float32 TIFF without exposing its
 // compression/layout details to the elevation importer. libtiff performs strip
