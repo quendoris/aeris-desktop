@@ -189,9 +189,14 @@ void draw_country_flags(
         height = std::max(height, 8.0);
 
         const QPointF device = world.map(QPointF(anchor->x, anchor->y));
+        // Country labels use the same geographic anchor in the base renderer.
+        // Keep the flag as a companion symbol above that anchor rather than
+        // covering the label text while both systems still have independent
+        // collision passes.
+        const double vertical_offset = 10.0 + height * 0.5;
         const QRectF rect(
             device.x() - width * 0.5,
-            device.y() - height * 0.5,
+            device.y() - vertical_offset - height * 0.5,
             width,
             height
         );
