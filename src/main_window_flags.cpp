@@ -6,10 +6,13 @@
 #include "flag_pack_import.hpp"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QStatusBar>
+
+#include <filesystem>
 
 namespace aeris::desktop {
 namespace {
