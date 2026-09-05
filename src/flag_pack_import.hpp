@@ -21,11 +21,12 @@ struct FlagPackImportResult final {
     [[nodiscard]] bool ok() const noexcept { return success; }
 };
 
-// Imports a directory of ISO-3166 alpha-2 SVG files (e.g. ru.svg, us.svg).
-// Every flag used by the current durable political source is embedded in the
-// .aeris project as a content-addressed resource before the Country flags layer
-// is attached. The caller's source directory is never persisted as project state.
-[[nodiscard]] FlagPackImportResult import_country_flag_svg_pack(
+// Imports a directory of ISO-3166 alpha-2 PNG files (e.g. RU.png, US.png).
+// A repository root containing png/256 is also accepted. Every flag used by the
+// current durable political source is embedded in the .aeris project as a
+// content-addressed resource before the Country flags layer is attached. The
+// caller's source directory is never persisted as project state.
+[[nodiscard]] FlagPackImportResult import_country_flag_png_pack(
     storage::ProjectStore& project,
     const std::filesystem::path& pack_root,
     std::string_view modified_utc);
