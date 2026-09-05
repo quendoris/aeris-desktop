@@ -84,6 +84,7 @@ Float32TiffReadResult read_single_band_float32_tiff(
     (void)TIFFGetFieldDefaulted(
         tiff.get(), TIFFTAG_COMPRESSION, &compression);
     info.compression = compression;
+    info.tiled = TIFFIsTiled(tiff.get()) != 0;
 
     if (info.width == 0U || info.height == 0U) {
         return failure(info, 0U, "TIFF dimensions are empty");
@@ -114,7 +115,7 @@ Float32TiffReadResult read_single_band_float32_tiff(
     std::uint32_t rows_read = 0U;
     std::string consumer_diagnostic;
 
-    if (TIFFIsTiled(tiff.get()) == 0) {
+    if (!info.tiled) {
         const tmsize_t scanline_bytes = TIFFScanlineSize(tiff.get());
         if (scanline_bytes <= 0 ||
             static_cast<std::uint64_t>(scanline_bytes) !=
