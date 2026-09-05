@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 quendoris
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include "flag_pack_import.hpp"
 #include "project_model.hpp"
 #include "world_data_import.hpp"
 
@@ -28,12 +29,13 @@ int fail(const int code, const std::string& diagnostic) {
 }  // namespace
 
 int main(const int argc, char** argv) {
-    if (argc != 3) {
-        return fail(2, "usage: <natural-earth-directory> <output.aeris>");
+    if (argc != 4) {
+        return fail(2, "usage: <natural-earth-directory> <country-flags-directory> <output.aeris>");
     }
 
     const std::filesystem::path source_root = argv[1];
-    const std::filesystem::path output = argv[2];
+    const std::filesystem::path flags_root = argv[2];
+    const std::filesystem::path output = argv[3];
     if (std::filesystem::exists(output)) {
         return fail(3, "output project already exists");
     }
@@ -49,7 +51,7 @@ int main(const int argc, char** argv) {
 
     auto empty = aeris::desktop::load_project_model(*created.store);
     if (!empty.ok() || !empty.model || !empty.model->layers.empty() ||
-        !empty.model->sources.empty()) {
+        !empty.model->sources.empty() || !empty.model->resources.empty()) {
         return fail(5, "fresh .aeris is not a valid empty desktop project");
     }
 
@@ -66,8 +68,9 @@ int main(const int argc, char** argv) {
     if (!expanded.ok() || !expanded.model) {
         return fail(7, "expanded project reload failed: " + expanded.diagnostic);
     }
-    if (expanded.model->layers.size() != 5U || expanded.model->sources.size() != 2U) {
-        return fail(8, "world import did not expand project to 5 layers / 2 sources");
+    if (expanded.model->layers.size() != 5U || expanded.model->sources.size() != 2U ||
+        !expanded.model->resources.empty()) {
+        return fail(8, "world import did not expand project to 5 layers / 2 sources / 0 resources");
     }
 
     const auto political = expanded.model->sources.find(std::string(kPoliticalSourceId));
@@ -97,17 +100,59 @@ int main(const int argc, char** argv) {
         return fail(12, "durable political source does not retain all seven palette classes");
     }
 
+    const auto flags = aeris::desktop::import_country_flag_png_pack(
+        *created.store,
+        flags_root,
+        kTimestamp
+    );
+    if (!flags.ok()) {
+        return fail(13, "country flag pack import failed: " + flags.diagnostic);
+    }
+    if (flags.flag_count < 150U || flags.flag_count > 256U) {
+        return fail(14, "country flag importer produced an implausible ISO flag count");
+    }
+
+    auto decorated = aeris::desktop::load_project_model(*created.store);
+    if (!decorated.ok() || !decorated.model) {
+        return fail(15, "flag-decorated project reload failed: " + decorated.diagnostic);
+    }
+    if (decorated.model->layers.size() != 6U || decorated.model->sources.size() != 2U ||
+        decorated.model->resources.size() != flags.flag_count) {
+        return fail(16, "flag import did not produce 6 layers / 2 sources / exact embedded resources");
+    }
+
+    const aeris::storage::ProjectLayerRecord* flag_layer = nullptr;
+    for (const auto& layer : decorated.model->layers) {
+        if (layer.role_id == aeris::storage::kLayerRoleCountryFlagV1) {
+            flag_layer = &layer;
+            break;
+        }
+    }
+    if (flag_layer == nullptr || flag_layer->sources.size() != 1U ||
+        flag_layer->resources.size() != flags.flag_count) {
+        return fail(17, "Country flags layer bindings are incomplete after reopen");
+    }
+
+    for (const auto& resource_entry : decorated.model->resources) {
+        const auto& resource = resource_entry.second;
+        if (!resource || resource->media_type != "image/png" || resource->bytes.empty() ||
+            resource->raster_image.isNull()) {
+            return fail(18, "embedded flag resource failed durable PNG reconstruction");
+        }
+    }
+
     const auto integrity = created.store->verify_integrity();
     if (!integrity.ok()) {
-        return fail(13, "expanded project integrity failed: " + integrity.diagnostic);
+        return fail(19, "decorated project integrity failed: " + integrity.diagnostic);
     }
 
     std::cout
         << "aeris_desktop_project_lifecycle_probe: PASS"
         << " empty_layers=0 empty_sources=0"
-        << " expanded_layers=" << expanded.model->layers.size()
-        << " expanded_sources=" << expanded.model->sources.size()
+        << " world_layers=5 world_sources=2"
         << " political_palette_classes=" << palette_assignments.size()
+        << " decorated_layers=" << decorated.model->layers.size()
+        << " embedded_flags=" << flags.flag_count
         << " revision=" << created.store->metadata().revision
         << '\n';
     return EXIT_SUCCESS;
