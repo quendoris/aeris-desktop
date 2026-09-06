@@ -32,6 +32,8 @@ set(AERIS_BUILD_PROJECT ON CACHE BOOL "" FORCE)
 add_subdirectory("${AERIS_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/aeris-core")
 
 add_executable(aeris-desktop
+    src/data_job_process.cpp
+    src/data_job_process.hpp
     src/elevation_detail_loader.cpp
     src/elevation_detail_loader.hpp
     src/elevation_import.cpp
