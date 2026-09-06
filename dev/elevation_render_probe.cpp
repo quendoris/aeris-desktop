@@ -14,11 +14,14 @@
 #include <QPainter>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
