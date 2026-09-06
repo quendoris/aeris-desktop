@@ -33,8 +33,9 @@ struct ElevationDetailLoadResult final {
 // pan/projection/project change and repaint an old view.
 class ElevationDetailLoader final : public QObject {
 public:
-    using ResultCallback =
-        std::function<void(std::vector<ElevationDetailLoadResult>)>;
+    using ResultCallback = std::function<void(
+        std::filesystem::path,
+        std::vector<ElevationDetailLoadResult>)>;
 
     explicit ElevationDetailLoader(QObject* parent = nullptr);
     ~ElevationDetailLoader() override;
@@ -50,6 +51,7 @@ public:
     // Public only as the queued delivery boundary used by the private worker.
     void accept_batch(
         std::uint64_t generation,
+        std::filesystem::path project_path,
         std::vector<ElevationDetailLoadResult> results);
 
 private:
