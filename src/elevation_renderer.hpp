@@ -61,6 +61,7 @@ struct ElevationSurfaceCache final {
     std::uint64_t detail_use_clock{0U};
     std::uint64_t detail_render_epoch{0U};
     std::size_t detail_tile_loads{0U};
+    std::size_t detail_samples_used{0U};
     bool detail_lod_active{false};
 };
 
