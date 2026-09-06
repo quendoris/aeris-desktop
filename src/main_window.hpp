@@ -21,6 +21,7 @@ class QTreeWidgetItem;
 
 namespace aeris::desktop {
 
+class DataJobProcess;
 class MapView;
 
 class MainWindow final : public QMainWindow {
@@ -73,6 +74,7 @@ private:
     std::unique_ptr<aeris::storage::ProjectStore> project_;
     std::shared_ptr<const ProjectModel> model_;
     SceneController scene_controller_;
+    DataJobProcess* data_job_{nullptr};
     bool rebuilding_layers_{false};
 };
 
