@@ -125,6 +125,26 @@ target_link_libraries(aeris-desktop-elevation-tiff-probe PRIVATE TIFF::TIFF)
 target_compile_features(aeris-desktop-elevation-tiff-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-elevation-tiff-probe PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-elevation-import-probe
+    dev/elevation_import_probe.cpp
+    src/elevation_import.cpp
+    src/elevation_import.hpp
+    src/elevation_tiff.cpp
+    src/elevation_tiff.hpp
+    src/elevation_tiff_inspect.cpp
+)
+target_include_directories(aeris-desktop-elevation-import-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-elevation-import-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    TIFF::TIFF
+)
+target_compile_features(aeris-desktop-elevation-import-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-elevation-import-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 add_executable(aeris-desktop-render-probe
     dev/render_project.cpp
     src/elevation_renderer.cpp
@@ -186,6 +206,7 @@ if(MSVC)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-elevation-import-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
 else()
@@ -193,6 +214,7 @@ else()
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-elevation-import-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
