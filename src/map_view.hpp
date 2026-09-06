@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QKeyEvent;
@@ -44,6 +45,23 @@ public:
     void set_project_model(
         std::shared_ptr<const ProjectModel> model,
         std::uint64_t revision);
+
+    // Layer visibility/name are presentation metadata over an otherwise
+    // identical immutable project snapshot. Updating them must not discard the
+    // already verified scene, numerical terrain cache, viewport, or trigger a
+    // fresh source/projection build. The caller guarantees that sources and
+    // resource bindings are unchanged.
+    void set_presentation_model(
+        std::shared_ptr<const ProjectModel> model,
+        const std::uint64_t revision) {
+        model_ = std::move(model);
+        revision_ = revision;
+        if (elevation_surface_cache_.model != nullptr) {
+            elevation_surface_cache_.model = model_.get();
+        }
+        update();
+    }
+
     void clear_project();
 
     void set_scene_request_callback(SceneRequestCallback callback);
