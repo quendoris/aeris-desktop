@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
         aeris::desktop::testing::import_deterministic_global_elevation_fixture(
             *opened.store,
             fixture_path,
-            "2026-09-06T00:00:00.000Z"
+            "2026-09-06T00:00:00Z"
         );
     if (!imported.ok() || !imported.changed ||
         imported.detail_tiles != kExpectedDetailTiles) {
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
         aeris::desktop::testing::import_deterministic_global_elevation_fixture(
             *reopened.store,
             fixture_path,
-            "2026-09-06T00:00:01.000Z"
+            "2026-09-06T00:00:01Z"
         );
     if (!repeated.ok() || repeated.changed ||
         repeated.detail_tiles != kExpectedDetailTiles) {
