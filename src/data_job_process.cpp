@@ -15,7 +15,9 @@ namespace {
 
 [[nodiscard]] QString path_to_qt(const std::filesystem::path& path) {
     const std::string utf8 = path.generic_u8string();
-    return QDir::fromNativeSeparators(QString::fromUtf8(utf8.data(), static_cast<int>(utf8.size())));
+    return QDir::fromNativeSeparators(
+        QString::fromUtf8(utf8.data(), static_cast<int>(utf8.size()))
+    );
 }
 
 [[nodiscard]] QString worker_program_path() {
@@ -56,6 +58,7 @@ DataJobProcess::DataJobProcess(QObject* parent)
             if (completed_) return;
             const QByteArray standard_output = process_->readAllStandardOutput();
             const QByteArray standard_error = process_->readAllStandardError();
+            const bool changed = standard_output.contains("changed=1");
             const bool protocol_ok =
                 standard_output.contains("AERIS_DATA_JOB_OK") &&
                 exit_status == QProcess::NormalExit &&
@@ -65,14 +68,10 @@ DataJobProcess::DataJobProcess(QObject* parent)
                 if (diagnostic.empty()) {
                     diagnostic = "aeris-data-worker exited without a successful result";
                 }
-                finish_once({false, false, std::move(diagnostic)});
+                finish_once({false, changed, std::move(diagnostic)});
                 return;
             }
-            finish_once({
-                true,
-                standard_output.contains("changed=1"),
-                {},
-            });
+            finish_once({true, changed, {}});
         }
     );
 }
