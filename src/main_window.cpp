@@ -3,22 +3,20 @@
 
 #include "main_window.hpp"
 
+#include "data_job_process.hpp"
 #include "map_view.hpp"
 #include "map_workspace_view.hpp"
-#include "world_data_import.hpp"
 
 #include "aeris/storage/layer.hpp"
 #include "aeris/view/projection_catalog.hpp"
 
 #include <QAction>
-#include <QApplication>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
-#include <QFutureWatcher>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
@@ -33,7 +31,6 @@
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <cmath>
@@ -480,9 +477,9 @@ void MainWindow::close_project() {
 }
 
 void MainWindow::import_world_data() {
-    if (property("aerisWorldImportBusy").toBool()) {
+    if (data_job_ != nullptr) {
         statusBar()->showMessage(
-            QStringLiteral("Natural Earth world import is already running"),
+            QStringLiteral("Another project data job is already running"),
             2500
         );
         return;
@@ -507,24 +504,26 @@ void MainWindow::import_world_data() {
     const std::filesystem::path source_root = filesystem_path_from_qt(selected);
     const std::string modified_utc = utc_now();
 
-    setProperty("aerisWorldImportBusy", true);
-    import_world_data_action_->setEnabled(false);
+    auto* job = new DataJobProcess(this);
+    data_job_ = job;
+    refresh_project_ui();
     statusBar()->showMessage(
-        QStringLiteral("Verifying and importing world data into .aeris in the background…")
+        QStringLiteral(
+            "Importing Natural Earth in isolated data worker · map remains interactive…"
+        )
     );
 
-    auto* watcher = new QFutureWatcher<WorldDataImportResult>(this);
-    connect(
-        watcher,
-        &QFutureWatcher<WorldDataImportResult>::finished,
-        this,
-        [this, watcher, project_path]() {
-            const WorldDataImportResult imported = watcher->result();
-            watcher->deleteLater();
-            setProperty("aerisWorldImportBusy", false);
+    const bool started = job->start(
+        "world",
+        project_path,
+        source_root,
+        modified_utc,
+        [this, job, project_path](DataJobResult imported) {
+            if (data_job_ == job) data_job_ = nullptr;
+            job->deleteLater();
+            refresh_project_ui();
 
             if (!project_ || project_->path() != project_path) {
-                refresh_project_ui();
                 statusBar()->showMessage(
                     imported.ok()
                         ? QStringLiteral("Natural Earth import finished in its original .aeris project")
@@ -536,7 +535,6 @@ void MainWindow::import_world_data() {
 
             const storage::Status refreshed = project_->refresh_metadata();
             if (!refreshed.ok()) {
-                refresh_project_ui();
                 QMessageBox::critical(
                     this,
                     QStringLiteral("World data metadata reload failed"),
@@ -549,8 +547,6 @@ void MainWindow::import_world_data() {
                 if (imported.changed) {
                     load_render_model();
                     refresh_project_ui();
-                } else {
-                    refresh_project_ui();
                 }
                 QMessageBox::critical(
                     this,
@@ -560,10 +556,7 @@ void MainWindow::import_world_data() {
                 return;
             }
 
-            if (!load_render_model()) {
-                refresh_project_ui();
-                return;
-            }
+            if (!load_render_model()) return;
             refresh_project_ui();
             layers_dock_->show();
             statusBar()->showMessage(
@@ -574,25 +567,16 @@ void MainWindow::import_world_data() {
             );
         }
     );
-
-    watcher->setFuture(QtConcurrent::run(
-        [project_path, source_root, modified_utc]() -> WorldDataImportResult {
-            storage::ProjectStoreResult opened = storage::ProjectStore::open(project_path);
-            if (!opened.ok()) {
-                return {
-                    false,
-                    false,
-                    "could not reopen target .aeris project for background world import: " +
-                        opened.status.diagnostic,
-                };
-            }
-            return import_natural_earth_110m_world(
-                *opened.store,
-                source_root,
-                modified_utc
-            );
-        }
-    ));
+    if (!started) {
+        if (data_job_ == job) data_job_ = nullptr;
+        job->deleteLater();
+        refresh_project_ui();
+        QMessageBox::critical(
+            this,
+            QStringLiteral("World data import failed to start"),
+            QStringLiteral("Could not launch the isolated AERIS data worker.")
+        );
+    }
 }
 
 bool MainWindow::load_render_model() {
@@ -722,11 +706,17 @@ void MainWindow::refresh_unfold_controls() {
 void MainWindow::refresh_project_ui() {
     const bool has_project = project_ != nullptr;
     const bool has_map_data = has_project && model_ && !model_->sources.empty();
+    const bool can_write_project_data =
+        has_project && !project_->metadata().frozen && data_job_ == nullptr;
+
     close_project_action_->setEnabled(has_project);
-    import_world_data_action_->setEnabled(
-        has_project && !project_->metadata().frozen &&
-        !property("aerisWorldImportBusy").toBool()
-    );
+    import_world_data_action_->setEnabled(can_write_project_data);
+    if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
+        action->setEnabled(can_write_project_data && has_map_data);
+    }
+    if (auto* action = findChild<QAction*>(QStringLiteral("importEtopo2022ElevationAction"))) {
+        action->setEnabled(can_write_project_data && has_map_data);
+    }
     zoom_in_action_->setEnabled(has_map_data);
     zoom_out_action_->setEnabled(has_map_data);
     reset_view_action_->setEnabled(has_map_data);
