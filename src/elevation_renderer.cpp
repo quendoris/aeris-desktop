@@ -5,7 +5,6 @@
 
 #include "aeris/elevation/grid.hpp"
 #include "aeris/geo/wgs84.hpp"
-#include "aeris/storage/resource.hpp"
 #include "aeris/view/surface_inverse.hpp"
 
 #include <QPainter>
@@ -331,30 +330,6 @@ struct DetailGrid final {
     return pixel;
 }
 
-[[nodiscard]] bool ensure_detail_store(
-    const ProjectModel& model,
-    ElevationSurfaceCache& cache
-) {
-    if (model.project_path.empty()) return false;
-    if (cache.detail_project_path == model.project_path) {
-        return cache.detail_store != nullptr;
-    }
-
-    cache.detail_store.reset();
-    cache.detail_tiles.clear();
-    cache.detail_failed_resources.clear();
-    cache.detail_project_path = model.project_path;
-    cache.detail_use_clock = 0U;
-    cache.detail_render_epoch = 0U;
-    cache.detail_tile_loads = 0U;
-    cache.detail_samples_used = 0U;
-
-    storage::ProjectStoreResult opened = storage::ProjectStore::open(model.project_path);
-    if (!opened.ok()) return false;
-    cache.detail_store = std::move(opened.store);
-    return true;
-}
-
 [[nodiscard]] bool validate_detail_tile(
     const elevation::ElevationTile& tile,
     const DetailGrid& grid,
@@ -400,14 +375,30 @@ struct DetailGrid final {
         tile.north_microarcsec == expected_north;
 }
 
+void record_missing_detail(
+    ElevationSurfaceCache& cache,
+    const std::string& resource_id
+) {
+    if (cache.detail_failed_resources.find(resource_id) !=
+        cache.detail_failed_resources.end()) {
+        return;
+    }
+    if (std::find(
+            cache.detail_pending_resources.begin(),
+            cache.detail_pending_resources.end(),
+            resource_id
+        ) == cache.detail_pending_resources.end()) {
+        cache.detail_pending_resources.push_back(resource_id);
+    }
+}
+
 [[nodiscard]] const elevation::ElevationTile* detail_tile(
     const DetailGrid& grid,
     const std::uint32_t row,
     const std::uint32_t column,
     ElevationSurfaceCache& cache
 ) {
-    if (!grid.valid || cache.detail_store == nullptr ||
-        row >= grid.rows || column >= grid.columns) {
+    if (!grid.valid || row >= grid.rows || column >= grid.columns) {
         return nullptr;
     }
     const std::size_t binding_index =
@@ -425,65 +416,21 @@ struct DetailGrid final {
     }
 
     ++cache.detail_use_clock;
-    for (ElevationDetailTileCacheEntry& entry : cache.detail_tiles) {
-        if (entry.resource_id != resource_id) continue;
-        entry.last_used = cache.detail_use_clock;
-        entry.render_epoch = cache.detail_render_epoch;
-        return &entry.tile;
-    }
-
-    ElevationDetailTileCacheEntry* victim = nullptr;
-    if (cache.detail_tiles.size() >= kElevationDetailCacheTileLimit) {
-        for (ElevationDetailTileCacheEntry& entry : cache.detail_tiles) {
-            if (entry.render_epoch == cache.detail_render_epoch) continue;
-            if (victim == nullptr || entry.last_used < victim->last_used) {
-                victim = &entry;
-            }
-        }
-        if (victim == nullptr) {
-            // This render already touched the entire bounded cache. Do not evict
-            // a tile still needed by the same frame; fall back to overview for
-            // the remainder rather than reading the world in a loop.
+    for (auto entry = cache.detail_tiles.begin();
+         entry != cache.detail_tiles.end(); ++entry) {
+        if (entry->resource_id != resource_id) continue;
+        if (!validate_detail_tile(entry->tile, grid, row, column)) {
+            cache.detail_failed_resources.insert(resource_id);
+            cache.detail_tiles.erase(entry);
             return nullptr;
         }
+        entry->last_used = cache.detail_use_clock;
+        entry->render_epoch = cache.detail_render_epoch;
+        return &entry->tile;
     }
 
-    std::vector<std::uint8_t> bytes;
-    const storage::Status streamed = storage::stream_embedded_resource(
-        *cache.detail_store,
-        resource_id,
-        [&](const void* data, const std::size_t size) {
-            const auto* begin = static_cast<const std::uint8_t*>(data);
-            bytes.insert(bytes.end(), begin, begin + size);
-            return storage::Status::success();
-        }
-    );
-    if (!streamed.ok()) {
-        cache.detail_failed_resources.insert(resource_id);
-        return nullptr;
-    }
-
-    elevation::ElevationTileDecodeResult decoded =
-        elevation::decode_elevation_tile_v1(bytes);
-    if (!decoded.ok() ||
-        !validate_detail_tile(*decoded.tile, grid, row, column)) {
-        cache.detail_failed_resources.insert(resource_id);
-        return nullptr;
-    }
-
-    ElevationDetailTileCacheEntry loaded{};
-    loaded.resource_id = resource_id;
-    loaded.tile = std::move(*decoded.tile);
-    loaded.last_used = cache.detail_use_clock;
-    loaded.render_epoch = cache.detail_render_epoch;
-    ++cache.detail_tile_loads;
-
-    if (victim != nullptr) {
-        *victim = std::move(loaded);
-        return &victim->tile;
-    }
-    cache.detail_tiles.push_back(std::move(loaded));
-    return &cache.detail_tiles.back().tile;
+    record_missing_detail(cache, resource_id);
+    return nullptr;
 }
 
 [[nodiscard]] std::optional<QRgb> styled_detail_pixel(
@@ -561,12 +508,32 @@ struct DetailGrid final {
     const double north_south_m =
         geo::authalic_radius_m() *
         (lat_step_deg * geo::kPi / 180.0);
-    if (west && east && north && south &&
-        east_west_m > 0.0 && north_south_m > 0.0) {
-        const double dz_east = (*east - *west) / (2.0 * east_west_m);
-        const double dz_north = (*north - *south) / (2.0 * north_south_m);
-        const double normal_east = -dz_east;
-        const double normal_north = -dz_north;
+
+    std::optional<double> dz_east;
+    if (east_west_m > 0.0) {
+        if (ix == 0U && east) {
+            dz_east = (*east - *center) / east_west_m;
+        } else if (ix + 1U == tile.width && west) {
+            dz_east = (*center - *west) / east_west_m;
+        } else if (west && east) {
+            dz_east = (*east - *west) / (2.0 * east_west_m);
+        }
+    }
+
+    std::optional<double> dz_north;
+    if (north_south_m > 0.0) {
+        if (iy == 0U && south) {
+            dz_north = (*center - *south) / north_south_m;
+        } else if (iy + 1U == tile.height && north) {
+            dz_north = (*north - *center) / north_south_m;
+        } else if (north && south) {
+            dz_north = (*north - *south) / (2.0 * north_south_m);
+        }
+    }
+
+    if (dz_east && dz_north) {
+        const double normal_east = -*dz_east;
+        const double normal_north = -*dz_north;
         const double normal_up = 1.0;
         const double normal_length = std::sqrt(
             normal_east * normal_east +
@@ -648,6 +615,22 @@ void begin_detail_render_epoch(ElevationSurfaceCache& cache) noexcept {
     ++cache.detail_render_epoch;
 }
 
+void trim_detail_requests_to_cache_budget(ElevationSurfaceCache& cache) {
+    const std::size_t protected_tiles = static_cast<std::size_t>(std::count_if(
+        cache.detail_tiles.begin(),
+        cache.detail_tiles.end(),
+        [&](const ElevationDetailTileCacheEntry& entry) {
+            return entry.render_epoch == cache.detail_render_epoch;
+        }
+    ));
+    const std::size_t budget = protected_tiles >= kElevationDetailCacheTileLimit
+        ? 0U
+        : kElevationDetailCacheTileLimit - protected_tiles;
+    if (cache.detail_pending_resources.size() > budget) {
+        cache.detail_pending_resources.resize(budget);
+    }
+}
+
 void rebuild_cache(
     QPainter& painter,
     const storage::ProjectLayerRecord& layer,
@@ -660,6 +643,8 @@ void rebuild_cache(
 ) {
     const QRect viewport = painter.viewport();
     cache.detail_samples_used = 0U;
+    cache.detail_pending_resources.clear();
+    cache.detail_lod_active = false;
     if (viewport.width() <= 0 || viewport.height() <= 0) {
         cache.image = {};
         return;
@@ -677,7 +662,7 @@ void rebuild_cache(
     const bool use_detail =
         zoom >= kElevationDetailLodZoom &&
         grid.valid &&
-        ensure_detail_store(model, cache);
+        !model.project_path.empty();
     cache.detail_lod_active = use_detail;
     if (use_detail) begin_detail_render_epoch(cache);
 
@@ -737,6 +722,12 @@ void rebuild_cache(
         }
     }
 
+    if (use_detail) {
+        trim_detail_requests_to_cache_budget(cache);
+    } else {
+        cache.detail_pending_resources.clear();
+    }
+
     cache.model = &model;
     cache.layer_id = layer.layer_id;
     cache.mode = frame.request.mode;
@@ -777,6 +768,82 @@ void draw_elevation_overview(
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.drawImage(QRectF(viewport), cache.image);
     painter.restore();
+}
+
+const std::vector<std::string>& elevation_detail_requests(
+    const ElevationSurfaceCache& cache
+) noexcept {
+    return cache.detail_pending_resources;
+}
+
+bool accept_elevation_detail_tile(
+    ElevationSurfaceCache& cache,
+    std::string resource_id,
+    elevation::ElevationTile tile
+) {
+    if (resource_id.empty()) return false;
+    cache.detail_failed_resources.erase(resource_id);
+    cache.detail_pending_resources.erase(
+        std::remove(
+            cache.detail_pending_resources.begin(),
+            cache.detail_pending_resources.end(),
+            resource_id
+        ),
+        cache.detail_pending_resources.end()
+    );
+
+    ++cache.detail_use_clock;
+    for (ElevationDetailTileCacheEntry& entry : cache.detail_tiles) {
+        if (entry.resource_id != resource_id) continue;
+        entry.tile = std::move(tile);
+        entry.last_used = cache.detail_use_clock;
+        entry.render_epoch = 0U;
+        ++cache.detail_tile_loads;
+        cache.image = {};
+        return true;
+    }
+
+    ElevationDetailTileCacheEntry* victim = nullptr;
+    if (cache.detail_tiles.size() >= kElevationDetailCacheTileLimit) {
+        for (ElevationDetailTileCacheEntry& entry : cache.detail_tiles) {
+            if (entry.render_epoch == cache.detail_render_epoch) continue;
+            if (victim == nullptr || entry.last_used < victim->last_used) {
+                victim = &entry;
+            }
+        }
+        if (victim == nullptr) return false;
+    }
+
+    ElevationDetailTileCacheEntry loaded{};
+    loaded.resource_id = std::move(resource_id);
+    loaded.tile = std::move(tile);
+    loaded.last_used = cache.detail_use_clock;
+    loaded.render_epoch = 0U;
+    ++cache.detail_tile_loads;
+
+    if (victim != nullptr) {
+        *victim = std::move(loaded);
+    } else {
+        cache.detail_tiles.push_back(std::move(loaded));
+    }
+    cache.image = {};
+    return true;
+}
+
+void reject_elevation_detail_resource(
+    ElevationSurfaceCache& cache,
+    const std::string_view resource_id
+) {
+    if (resource_id.empty()) return;
+    cache.detail_failed_resources.emplace(resource_id);
+    cache.detail_pending_resources.erase(
+        std::remove(
+            cache.detail_pending_resources.begin(),
+            cache.detail_pending_resources.end(),
+            resource_id
+        ),
+        cache.detail_pending_resources.end()
+    );
 }
 
 }  // namespace aeris::desktop
