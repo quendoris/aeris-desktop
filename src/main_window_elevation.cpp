@@ -107,6 +107,10 @@ void MainWindow::import_etopo_elevation() {
             }
 
             if (!imported.ok()) {
+                if (imported.changed) {
+                    load_render_model();
+                    refresh_project_ui();
+                }
                 QMessageBox::critical(
                     this,
                     QStringLiteral("ETOPO elevation import failed"),
