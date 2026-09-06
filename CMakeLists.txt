@@ -84,6 +84,34 @@ set_target_properties(aeris-desktop PROPERTIES
     MACOSX_BUNDLE ON
 )
 
+# Long acquisition/import work belongs outside the GUI process. The first
+# worker slice intentionally exposes only the already-existing local import
+# operations; later download/resume adapters can use the same process boundary.
+add_executable(aeris-data-worker
+    src/data_worker_main.cpp
+    src/elevation_import.cpp
+    src/elevation_import.hpp
+    src/elevation_tiff.cpp
+    src/elevation_tiff.hpp
+    src/elevation_tiff_inspect.cpp
+    src/flag_pack_import.cpp
+    src/flag_pack_import.hpp
+    src/world_data_import.cpp
+    src/world_data_import.hpp
+)
+target_include_directories(aeris-data-worker PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-data-worker PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    TIFF::TIFF
+)
+target_compile_features(aeris-data-worker PRIVATE cxx_std_17)
+set_target_properties(aeris-data-worker PROPERTIES CXX_EXTENSIONS OFF)
+add_dependencies(aeris-desktop aeris-data-worker)
+
 add_executable(aeris-demo-project dev/make_demo_project.cpp)
 target_link_libraries(aeris-demo-project PRIVATE
     AERIS::core
@@ -235,6 +263,7 @@ set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTE
 
 if(MSVC)
     target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-data-worker PRIVATE /W4 /permissive-)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE /W4 /permissive-)
@@ -244,6 +273,7 @@ if(MSVC)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-data-worker PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
