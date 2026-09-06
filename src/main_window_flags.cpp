@@ -59,7 +59,7 @@ void MainWindow::import_country_flags() {
     const FlagPackImportResult imported = import_country_flag_png_pack(
         *project_,
         filesystem_path_from_qt_flags(selected),
-        QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString()
     );
     QApplication::restoreOverrideCursor();
 
