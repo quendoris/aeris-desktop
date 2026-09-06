@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 quendoris
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include "elevation_ui.hpp"
 #include "flag_ui.hpp"
 #include "main_window.hpp"
 
@@ -13,6 +14,7 @@ int main(int argc, char** argv) {
 
     aeris::desktop::MainWindow window;
     aeris::desktop::install_country_flag_import_action(window);
+    aeris::desktop::install_elevation_import_action(window);
     window.show();
     return application.exec();
 }
