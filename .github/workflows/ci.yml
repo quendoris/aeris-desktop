@@ -54,7 +54,7 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-elevation-tiff-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-elevation-tiff-probe aeris-desktop-elevation-import-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
 
       - name: Prove compressed Float32 TIFF acquisition
@@ -82,6 +82,11 @@ jobs:
           ./build/aeris-desktop-project-lifecycle-probe
           ${{ runner.temp }}/natural-earth-v5.1.2
           ${{ runner.temp }}/country-flags
+          ${{ runner.temp }}/desktop-demo.aeris
+
+      - name: Prove numerical elevation import survives source deletion and reopen
+        run: >-
+          ./build/aeris-desktop-elevation-import-probe
           ${{ runner.temp }}/desktop-demo.aeris
 
       - name: Remove all acquisition packs
