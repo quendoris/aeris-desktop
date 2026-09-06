@@ -30,4 +30,18 @@ struct ElevationImportResult final {
     const std::filesystem::path& geotiff_path,
     std::string_view modified_utc);
 
+namespace testing {
+
+// Test-only seam for deterministic CI fixtures. It uses the same streaming,
+// quantization, tiling, overview, embedding, layer and integrity pipeline as the
+// production ETOPO importer, but with a tiny full-world 1-degree raster. The
+// production entry point above remains strict about the official ETOPO filename
+// and 21600x10800 60-arc-second grid.
+[[nodiscard]] ElevationImportResult import_deterministic_global_elevation_fixture(
+    storage::ProjectStore& project,
+    const std::filesystem::path& geotiff_path,
+    std::string_view modified_utc);
+
+}  // namespace testing
+
 }  // namespace aeris::desktop
