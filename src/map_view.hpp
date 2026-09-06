@@ -73,6 +73,9 @@ public:
     [[nodiscard]] std::size_t elevation_detail_tile_loads() const noexcept {
         return elevation_surface_cache_.detail_tile_loads;
     }
+    [[nodiscard]] std::size_t elevation_detail_samples_used() const noexcept {
+        return elevation_surface_cache_.detail_samples_used;
+    }
 
     // Tool overlays need the camera that produced the frame actually visible
     // underneath them, not a newer camera whose async preview is still pending.
