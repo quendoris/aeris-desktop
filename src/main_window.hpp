@@ -11,6 +11,7 @@
 #include <memory>
 
 class QAction;
+class QCloseEvent;
 class QComboBox;
 class QDockWidget;
 class QLabel;
@@ -34,6 +35,9 @@ public:
     // to the Data menu without taking ownership of project/storage internals.
     void import_country_flags();
     void import_etopo_elevation();
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void build_ui();
