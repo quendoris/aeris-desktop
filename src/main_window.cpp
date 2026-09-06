@@ -18,6 +18,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFutureWatcher>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
@@ -32,9 +33,13 @@
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <memory>
+#include <string>
 #include <utility>
 
 namespace aeris::desktop {
@@ -475,6 +480,13 @@ void MainWindow::close_project() {
 }
 
 void MainWindow::import_world_data() {
+    if (property("aerisWorldImportBusy").toBool()) {
+        statusBar()->showMessage(
+            QStringLiteral("Natural Earth world import is already running"),
+            2500
+        );
+        return;
+    }
     if (!project_) return;
     if (project_->metadata().frozen) {
         QMessageBox::warning(
@@ -491,38 +503,96 @@ void MainWindow::import_world_data() {
     );
     if (selected.isEmpty()) return;
 
-    statusBar()->showMessage(QStringLiteral("Verifying and importing world data into .aeris…"));
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    const WorldDataImportResult imported = import_natural_earth_110m_world(
-        *project_,
-        filesystem_path_from_qt(selected),
-        utc_now()
-    );
-    QApplication::restoreOverrideCursor();
+    const std::filesystem::path project_path = project_->path();
+    const std::filesystem::path source_root = filesystem_path_from_qt(selected);
+    const std::string modified_utc = utc_now();
 
-    if (!imported.ok()) {
-        if (imported.changed) {
-            project_->refresh_metadata();
-            load_render_model();
-            refresh_project_ui();
-        }
-        QMessageBox::critical(
-            this,
-            QStringLiteral("World data import failed"),
-            QString::fromStdString(imported.diagnostic)
-        );
-        return;
-    }
-
-    if (!load_render_model()) return;
-    refresh_project_ui();
-    layers_dock_->show();
+    setProperty("aerisWorldImportBusy", true);
+    import_world_data_action_->setEnabled(false);
     statusBar()->showMessage(
-        imported.changed
-            ? QStringLiteral("World data committed to .aeris · source directory is no longer required for rendering")
-            : QStringLiteral("World data is already present in this project"),
-        6500
+        QStringLiteral("Verifying and importing world data into .aeris in the background…")
     );
+
+    auto* watcher = new QFutureWatcher<WorldDataImportResult>(this);
+    connect(
+        watcher,
+        &QFutureWatcher<WorldDataImportResult>::finished,
+        this,
+        [this, watcher, project_path]() {
+            const WorldDataImportResult imported = watcher->result();
+            watcher->deleteLater();
+            setProperty("aerisWorldImportBusy", false);
+
+            if (!project_ || project_->path() != project_path) {
+                refresh_project_ui();
+                statusBar()->showMessage(
+                    imported.ok()
+                        ? QStringLiteral("Natural Earth import finished in its original .aeris project")
+                        : QStringLiteral("Natural Earth import failed in its original .aeris project"),
+                    5000
+                );
+                return;
+            }
+
+            const storage::Status refreshed = project_->refresh_metadata();
+            if (!refreshed.ok()) {
+                refresh_project_ui();
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("World data metadata reload failed"),
+                    QString::fromStdString(refreshed.diagnostic)
+                );
+                return;
+            }
+
+            if (!imported.ok()) {
+                if (imported.changed) {
+                    load_render_model();
+                    refresh_project_ui();
+                } else {
+                    refresh_project_ui();
+                }
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("World data import failed"),
+                    QString::fromStdString(imported.diagnostic)
+                );
+                return;
+            }
+
+            if (!load_render_model()) {
+                refresh_project_ui();
+                return;
+            }
+            refresh_project_ui();
+            layers_dock_->show();
+            statusBar()->showMessage(
+                imported.changed
+                    ? QStringLiteral("World data committed to .aeris · source directory is no longer required for rendering")
+                    : QStringLiteral("World data is already present in this project"),
+                6500
+            );
+        }
+    );
+
+    watcher->setFuture(QtConcurrent::run(
+        [project_path, source_root, modified_utc]() -> WorldDataImportResult {
+            storage::ProjectStoreResult opened = storage::ProjectStore::open(project_path);
+            if (!opened.ok()) {
+                return {
+                    false,
+                    false,
+                    "could not reopen target .aeris project for background world import: " +
+                        opened.status.diagnostic,
+                };
+            }
+            return import_natural_earth_110m_world(
+                *opened.store,
+                source_root,
+                modified_utc
+            );
+        }
+    ));
 }
 
 bool MainWindow::load_render_model() {
@@ -567,9 +637,10 @@ void MainWindow::set_layer_visibility(QTreeWidgetItem* item) {
     if (rebuilding_layers_ || item == nullptr || !project_ || !model_) return;
 
     const std::string layer_id = item->data(0, Qt::UserRole).toString().toStdString();
+    const bool visible = item->checkState(0) == Qt::Checked;
     storage::LayerStateUpdate update{};
     update.modified_utc = utc_now();
-    update.visible = item->checkState(0) == Qt::Checked;
+    update.visible = visible;
     const storage::LayerMutationResult result =
         storage::update_layer_state(*project_, layer_id, update);
     if (!result.ok()) {
@@ -582,20 +653,35 @@ void MainWindow::set_layer_visibility(QTreeWidgetItem* item) {
         return;
     }
 
-    ProjectModelLoadResult loaded = load_project_model(*project_);
-    if (!loaded.ok()) {
-        statusBar()->showMessage(
-            QStringLiteral("Layer committed, reload failed: %1")
-                .arg(QString::fromStdString(loaded.diagnostic)),
-            5000
+    if (result.changed) {
+        // Visibility changes neither source geometry nor resource bindings.
+        // Preserve the already-decoded immutable sources/resources and the
+        // verified render frame; copying this snapshot only duplicates the
+        // tiny layer vector and shared_ptr maps. Full ProjectModel reload here
+        // used to re-stream/decode every flag PNG and the terrain overview.
+        auto updated_model = std::make_shared<ProjectModel>(*model_);
+        const auto layer = std::find_if(
+            updated_model->layers.begin(),
+            updated_model->layers.end(),
+            [&](const storage::ProjectLayerRecord& record) {
+                return record.layer_id == layer_id;
+            }
         );
-        return;
+        if (layer == updated_model->layers.end()) {
+            // This should be impossible after a successful mutation against the
+            // same snapshot; reconcile from durable storage rather than guess.
+            if (!load_render_model()) return;
+        } else {
+            layer->visible = visible;
+            model_ = std::move(updated_model);
+            scene_controller_.set_model(model_);
+            map_view_->set_presentation_model(model_, project_->metadata().revision);
+            rebuild_layer_tree();
+        }
+    } else {
+        rebuild_layer_tree();
     }
 
-    model_ = std::move(loaded.model);
-    scene_controller_.set_model(model_);
-    map_view_->set_project_model(model_, project_->metadata().revision);
-    rebuild_layer_tree();
     refresh_project_ui();
     statusBar()->showMessage(
         result.changed
@@ -638,7 +724,8 @@ void MainWindow::refresh_project_ui() {
     const bool has_map_data = has_project && model_ && !model_->sources.empty();
     close_project_action_->setEnabled(has_project);
     import_world_data_action_->setEnabled(
-        has_project && !project_->metadata().frozen
+        has_project && !project_->metadata().frozen &&
+        !property("aerisWorldImportBusy").toBool()
     );
     zoom_in_action_->setEnabled(has_map_data);
     zoom_out_action_->setEnabled(has_map_data);
