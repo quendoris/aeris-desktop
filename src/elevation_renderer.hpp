@@ -7,7 +7,6 @@
 
 #include "aeris/elevation/grid.hpp"
 #include "aeris/storage/layer.hpp"
-#include "aeris/storage/project.hpp"
 #include "aeris/view/scene.hpp"
 
 #include <QImage>
@@ -15,9 +14,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -48,15 +46,13 @@ struct ElevationSurfaceCache final {
     int height{0};
     QImage image;
 
-    // Detail state is deliberately separate from the discardable screen-space
-    // image. At high zoom a second read-only handle opens the same durable
-    // .aeris file and only requested numerical tiles are decoded. The raw tile
-    // cache has a hard entry bound; a render never evicts a tile already used in
-    // the same epoch, so an unexpectedly wide viewport falls back to overview
-    // instead of thrashing through the entire world dataset.
-    std::filesystem::path detail_project_path;
-    std::unique_ptr<storage::ProjectStore> detail_store;
+    // The UI thread owns only decoded tiles already delivered by the background
+    // loader. paintEvent never opens ProjectStore or streams SQLite blobs. A
+    // render records the missing resource ids it would benefit from; MapView
+    // sends that bounded set to ElevationDetailLoader after painting and uses
+    // the durable overview until the verified tile batch arrives.
     std::vector<ElevationDetailTileCacheEntry> detail_tiles;
+    std::vector<std::string> detail_pending_resources;
     std::unordered_set<std::string> detail_failed_resources;
     std::uint64_t detail_use_clock{0U};
     std::uint64_t detail_render_epoch{0U};
@@ -67,9 +63,8 @@ struct ElevationSurfaceCache final {
 
 // Reprojects durable numerical elevation into the exact surface currently
 // rendered by MapView. Whole-world navigation uses the eagerly reconstructed
-// overview. At sufficiently high zoom the same path lazily samples bounded
-// detail tiles directly from .aeris; both representations are derived frontend
-// presentation and numerical elevation remains the only durable state.
+// overview. At sufficiently high zoom, already-delivered detail tiles are used
+// directly and missing ids are exposed as non-blocking background requests.
 void draw_elevation_overview(
     QPainter& painter,
     const storage::ProjectLayerRecord& layer,
@@ -78,5 +73,20 @@ void draw_elevation_overview(
     double zoom,
     QPointF pan,
     ElevationSurfaceCache& cache);
+
+[[nodiscard]] const std::vector<std::string>& elevation_detail_requests(
+    const ElevationSurfaceCache& cache) noexcept;
+
+// Called only on the UI thread after the background loader has opened the
+// project, hash-verified the embedded resource and decoded the numerical tile.
+// Returns true when the bounded cache changed and the screen cache must rebuild.
+[[nodiscard]] bool accept_elevation_detail_tile(
+    ElevationSurfaceCache& cache,
+    std::string resource_id,
+    elevation::ElevationTile tile);
+
+void reject_elevation_detail_resource(
+    ElevationSurfaceCache& cache,
+    std::string_view resource_id);
 
 }  // namespace aeris::desktop
