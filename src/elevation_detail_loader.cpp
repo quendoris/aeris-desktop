@@ -11,6 +11,7 @@
 #include <QRunnable>
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <unordered_map>
 #include <utility>
@@ -117,7 +118,7 @@ public:
                 [&](const void* data, const std::size_t size) {
                     if (token->load(std::memory_order_relaxed)) {
                         return storage::Status{
-                            storage::ErrorCode::io_error,
+                            storage::StorageError::filesystem_failure,
                             "terrain detail load canceled",
                         };
                     }
@@ -160,7 +161,7 @@ public:
 
 private:
     void deliver(std::vector<ElevationDetailLoadResult> results) {
-        if (canceled_->load(std::memory_order_relaxed)) return;
+        if (canceled_->load(std::memory_order_relaxed) || !target_) return;
         QPointer<ElevationDetailLoader> target = target_;
         QMetaObject::invokeMethod(
             target_,
