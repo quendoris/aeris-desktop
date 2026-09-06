@@ -61,6 +61,19 @@ public:
         return projection_central_meridian_deg_;
     }
 
+    // The projection/terrain proof executables use these read-only counters to
+    // verify rendering policy without reaching into storage or mutating cache
+    // state. They are also useful diagnostics for the developer inspector.
+    [[nodiscard]] bool elevation_detail_lod_active() const noexcept {
+        return elevation_surface_cache_.detail_lod_active;
+    }
+    [[nodiscard]] std::size_t elevation_detail_cached_tiles() const noexcept {
+        return elevation_surface_cache_.detail_tiles.size();
+    }
+    [[nodiscard]] std::size_t elevation_detail_tile_loads() const noexcept {
+        return elevation_surface_cache_.detail_tile_loads;
+    }
+
     // Tool overlays need the camera that produced the frame actually visible
     // underneath them, not a newer camera whose async preview is still pending.
     [[nodiscard]] bool has_current_frame() const noexcept {
