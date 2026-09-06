@@ -49,7 +49,7 @@ QLabel* selectable_value(QWidget* parent) {
 
 [[nodiscard]] std::string utc_now() {
     return QDateTime::currentDateTimeUtc()
-        .toString(Qt::ISODateWithMs)
+        .toString(Qt::ISODate)
         .toStdString();
 }
 
