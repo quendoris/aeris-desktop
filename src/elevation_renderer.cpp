@@ -347,6 +347,7 @@ struct DetailGrid final {
     cache.detail_use_clock = 0U;
     cache.detail_render_epoch = 0U;
     cache.detail_tile_loads = 0U;
+    cache.detail_samples_used = 0U;
 
     storage::ProjectStoreResult opened = storage::ProjectStore::open(model.project_path);
     if (!opened.ok()) return false;
@@ -658,6 +659,7 @@ void rebuild_cache(
     ElevationSurfaceCache& cache
 ) {
     const QRect viewport = painter.viewport();
+    cache.detail_samples_used = 0U;
     if (viewport.width() <= 0 || viewport.height() <= 0) {
         cache.image = {};
         return;
@@ -722,6 +724,7 @@ void rebuild_cache(
                     geographic.latitude_deg,
                     cache
                 );
+                if (pixel.has_value()) ++cache.detail_samples_used;
             }
             if (!pixel.has_value()) {
                 pixel = geographic_preview_pixel(
