@@ -108,6 +108,10 @@ void MainWindow::import_country_flags() {
             }
 
             if (!imported.ok()) {
+                if (imported.changed) {
+                    load_render_model();
+                    refresh_project_ui();
+                }
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Country flag import failed"),
