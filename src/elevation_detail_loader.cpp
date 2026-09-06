@@ -163,10 +163,22 @@ private:
     void deliver(std::vector<ElevationDetailLoadResult> results) {
         if (canceled_->load(std::memory_order_relaxed) || !target_) return;
         QPointer<ElevationDetailLoader> target = target_;
+        const std::filesystem::path project_path = project_path_;
         QMetaObject::invokeMethod(
             target_,
-            [target, generation = generation_, results = std::move(results)]() mutable {
-                if (target) target->accept_batch(generation, std::move(results));
+            [
+                target,
+                generation = generation_,
+                project_path,
+                results = std::move(results)
+            ]() mutable {
+                if (target) {
+                    target->accept_batch(
+                        generation,
+                        std::move(project_path),
+                        std::move(results)
+                    );
+                }
             },
             Qt::QueuedConnection
         );
@@ -240,12 +252,15 @@ void ElevationDetailLoader::cancel() {
 
 void ElevationDetailLoader::accept_batch(
     const std::uint64_t generation,
+    std::filesystem::path project_path,
     std::vector<ElevationDetailLoadResult> results
 ) {
     if (generation != generation_) return;
     task_running_ = false;
     active_resource_ids_.clear();
-    if (result_callback_) result_callback_(std::move(results));
+    if (result_callback_) {
+        result_callback_(std::move(project_path), std::move(results));
+    }
 }
 
 void ElevationDetailLoader::start_request(
