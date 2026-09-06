@@ -11,8 +11,11 @@
 #include "aeris/view/surface.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QImage>
 #include <QPainter>
+#include <QThread>
 
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +31,7 @@ namespace {
 constexpr double kProofCutDeg = 37.0;
 constexpr std::size_t kMinimumChangedPixels = 1000U;
 constexpr std::size_t kMinimumDetailSamples = 1000U;
+constexpr qint64 kDetailWorkerProofTimeoutMs = 10000;
 
 struct RenderProof final {
     QImage image;
@@ -35,6 +39,12 @@ struct RenderProof final {
     std::size_t detail_cached_tiles{0U};
     std::size_t detail_tile_loads{0U};
     std::size_t detail_samples_used{0U};
+    std::size_t detail_pending_resources{0U};
+    bool detail_loader_busy{false};
+    std::size_t initial_detail_tile_loads{0U};
+    std::size_t initial_detail_samples_used{0U};
+    std::size_t initial_pending_resources{0U};
+    bool initial_loader_busy{false};
     double zoom{1.0};
 };
 
@@ -72,6 +82,15 @@ struct RenderProof final {
     return true;
 }
 
+[[nodiscard]] QImage render_view(aeris::desktop::MapView& view) {
+    QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    view.render(&painter);
+    painter.end();
+    return image;
+}
+
 [[nodiscard]] RenderProof render_model(
     QApplication& application,
     std::shared_ptr<const aeris::desktop::ProjectModel> model,
@@ -97,21 +116,37 @@ struct RenderProof final {
              ++attempt) {
             view.zoom_in();
         }
-        application.processEvents();
+        // Do not process events here. The first explicit render below must prove
+        // that high-zoom paint itself only records missing detail and never waits
+        // for storage/hash/decode work on the UI thread.
     }
 
     RenderProof proof{};
-    proof.image = QImage(view.size(), QImage::Format_ARGB32_Premultiplied);
-    proof.image.fill(Qt::transparent);
-    QPainter painter(&proof.image);
-    view.render(&painter);
-    painter.end();
-    application.processEvents();
+    proof.image = render_view(view);
+    proof.initial_detail_tile_loads = view.elevation_detail_tile_loads();
+    proof.initial_detail_samples_used = view.elevation_detail_samples_used();
+    proof.initial_pending_resources = view.elevation_detail_pending_resources();
+    proof.initial_loader_busy = view.elevation_detail_loader_busy();
+
+    if (detail_zoom && proof.initial_loader_busy) {
+        QElapsedTimer timer;
+        timer.start();
+        while (view.elevation_detail_loader_busy() &&
+               timer.elapsed() < kDetailWorkerProofTimeoutMs) {
+            application.processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1UL);
+        }
+        application.processEvents();
+        proof.image = render_view(view);
+        application.processEvents();
+    }
 
     proof.detail_lod_active = view.elevation_detail_lod_active();
     proof.detail_cached_tiles = view.elevation_detail_cached_tiles();
     proof.detail_tile_loads = view.elevation_detail_tile_loads();
     proof.detail_samples_used = view.elevation_detail_samples_used();
+    proof.detail_pending_resources = view.elevation_detail_pending_resources();
+    proof.detail_loader_busy = view.elevation_detail_loader_busy();
     proof.zoom = view.zoom_factor();
     view.hide();
     application.processEvents();
@@ -183,10 +218,11 @@ struct RenderProof final {
         return false;
     }
     if (overview.detail_lod_active || overview.detail_cached_tiles != 0U ||
-        overview.detail_tile_loads != 0U || overview.detail_samples_used != 0U) {
+        overview.detail_tile_loads != 0U || overview.detail_samples_used != 0U ||
+        overview.detail_pending_resources != 0U || overview.detail_loader_busy) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
-            << " used detail elevation below the LOD threshold\n";
+            << " used/requested detail elevation below the LOD threshold\n";
         return false;
     }
 
@@ -222,28 +258,54 @@ struct RenderProof final {
             << " pixels\n";
         return false;
     }
+
+    // The first high-zoom paint must have returned before any durable tile was
+    // accepted or sampled. It may only have produced a bounded async request.
+    if (detail.initial_detail_tile_loads != 0U ||
+        detail.initial_detail_samples_used != 0U ||
+        detail.initial_pending_resources == 0U ||
+        detail.initial_pending_resources > aeris::desktop::kElevationDetailCacheTileLimit ||
+        !detail.initial_loader_busy) {
+        std::cerr
+            << aeris::view::surface_mode_name(mode)
+            << " high-zoom paint did not stay I/O-free: initial_loads="
+            << detail.initial_detail_tile_loads
+            << " initial_samples=" << detail.initial_detail_samples_used
+            << " initial_pending=" << detail.initial_pending_resources
+            << " initial_worker=" << detail.initial_loader_busy << '\n';
+        return false;
+    }
+
     if (!detail.detail_lod_active ||
         detail.zoom < aeris::desktop::kElevationDetailLodZoom ||
         detail.detail_cached_tiles == 0U ||
         detail.detail_cached_tiles > aeris::desktop::kElevationDetailCacheTileLimit ||
         detail.detail_tile_loads == 0U ||
         detail.detail_tile_loads > aeris::desktop::kElevationDetailCacheTileLimit ||
-        detail.detail_samples_used < kMinimumDetailSamples) {
+        detail.detail_samples_used < kMinimumDetailSamples ||
+        detail.detail_loader_busy) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
-            << " did not use bounded durable detail samples at high zoom: active="
+            << " did not consume a completed bounded async detail batch: active="
             << detail.detail_lod_active
             << " zoom=" << detail.zoom
             << " cached=" << detail.detail_cached_tiles
             << " loads=" << detail.detail_tile_loads
-            << " samples=" << detail.detail_samples_used << '\n';
+            << " samples=" << detail.detail_samples_used
+            << " pending=" << detail.detail_pending_resources
+            << " worker=" << detail.detail_loader_busy << '\n';
         return false;
     }
-    if (detail_without.detail_lod_active ||
+
+    if (detail_without.initial_pending_resources != 0U ||
+        detail_without.initial_loader_busy ||
+        detail_without.detail_lod_active ||
         detail_without.detail_cached_tiles != 0U ||
         detail_without.detail_tile_loads != 0U ||
-        detail_without.detail_samples_used != 0U) {
-        std::cerr << "hidden elevation layer unexpectedly activated detail LOD\n";
+        detail_without.detail_samples_used != 0U ||
+        detail_without.detail_pending_resources != 0U ||
+        detail_without.detail_loader_busy) {
+        std::cerr << "hidden elevation layer unexpectedly activated async detail LOD\n";
         return false;
     }
 
@@ -252,8 +314,9 @@ struct RenderProof final {
         << " terrain pixels: PASS overview_changed=" << overview_changed
         << " detail_changed=" << detail_changed
         << " detail_zoom=" << detail.zoom
+        << " initial_pending=" << detail.initial_pending_resources
         << " cached_tiles=" << detail.detail_cached_tiles
-        << " tile_loads=" << detail.detail_tile_loads
+        << " async_tile_loads=" << detail.detail_tile_loads
         << " detail_samples=" << detail.detail_samples_used << '\n';
     return true;
 }
@@ -319,6 +382,6 @@ int main(int argc, char** argv) {
 
     std::cout
         << "aeris-desktop-elevation-render-probe: PASS "
-        << "overview + bounded high-zoom detail change durable Globe and Sinu-Mollweide pixels\n";
+        << "overview + I/O-free first paint + bounded async detail change durable Globe and Sinu-Mollweide pixels\n";
     return EXIT_SUCCESS;
 }
