@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 find_package(TIFF REQUIRED)
 
 set(AERIS_CORE_SOURCE_DIR "" CACHE PATH "Path to a local aeris-core checkout")
@@ -39,6 +39,8 @@ add_executable(aeris-desktop
     src/elevation_tiff.cpp
     src/elevation_tiff.hpp
     src/elevation_tiff_inspect.cpp
+    src/elevation_ui.cpp
+    src/elevation_ui.hpp
     src/flag_pack_import.cpp
     src/flag_pack_import.hpp
     src/flag_renderer.cpp
@@ -47,6 +49,7 @@ add_executable(aeris-desktop
     src/flag_ui.hpp
     src/main.cpp
     src/main_window.cpp
+    src/main_window_elevation.cpp
     src/main_window_flags.cpp
     src/main_window.hpp
     src/map_view.cpp
@@ -70,6 +73,7 @@ target_link_libraries(aeris-desktop PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Concurrent
 )
 target_compile_features(aeris-desktop PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop PROPERTIES
