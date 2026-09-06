@@ -4,6 +4,7 @@
 #pragma once
 
 #include "aeris/view/scene.hpp"
+#include "elevation_detail_loader.hpp"
 #include "elevation_renderer.hpp"
 #include "project_model.hpp"
 #include "scene_controller.hpp"
@@ -17,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 class QKeyEvent;
 class QMouseEvent;
@@ -76,6 +78,12 @@ public:
     [[nodiscard]] std::size_t elevation_detail_samples_used() const noexcept {
         return elevation_surface_cache_.detail_samples_used;
     }
+    [[nodiscard]] std::size_t elevation_detail_pending_resources() const noexcept {
+        return elevation_detail_requests(elevation_surface_cache_).size();
+    }
+    [[nodiscard]] bool elevation_detail_loader_busy() const noexcept {
+        return elevation_detail_loader_.busy();
+    }
 
     // Tool overlays need the camera that produced the frame actually visible
     // underneath them, not a newer camera whose async preview is still pending.
@@ -124,6 +132,9 @@ private:
     void apply_zoom(double factor, const QPointF& anchor);
     void store_active_viewport() noexcept;
     void restore_active_viewport() noexcept;
+    void dispatch_elevation_detail_requests();
+    void accept_elevation_detail_results(
+        std::vector<ElevationDetailLoadResult> results);
     [[nodiscard]] static std::size_t viewport_index(view::SurfaceMode mode) noexcept;
 
     std::shared_ptr<const ProjectModel> model_;
@@ -142,6 +153,7 @@ private:
     QPointF viewport_pan_{};
     std::array<ViewportState, 4U> viewports_{};
     ElevationSurfaceCache elevation_surface_cache_{};
+    ElevationDetailLoader elevation_detail_loader_;
 
     QPoint last_mouse_{};
     bool dragging_{false};
