@@ -67,7 +67,7 @@ void MainWindow::import_etopo_elevation() {
     const std::filesystem::path project_path = project_->path();
     const std::filesystem::path tiff_path = filesystem_path_from_qt_elevation(selected);
     const std::string modified_utc = QDateTime::currentDateTimeUtc()
-        .toString(Qt::ISODateWithMs)
+        .toString(Qt::ISODate)
         .toStdString();
 
     setProperty("aerisElevationImportBusy", true);
