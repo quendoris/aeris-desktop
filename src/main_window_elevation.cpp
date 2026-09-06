@@ -5,12 +5,12 @@
 
 #include "elevation_import.hpp"
 
+#include <QAction>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
 #include <QFutureWatcher>
-#include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QtConcurrent/QtConcurrentRun>
@@ -71,8 +71,9 @@ void MainWindow::import_etopo_elevation() {
         .toStdString();
 
     setProperty("aerisElevationImportBusy", true);
-    menuBar()->setEnabled(false);
-    layers_dock_->setEnabled(false);
+    if (auto* action = findChild<QAction*>(QStringLiteral("importEtopo2022ElevationAction"))) {
+        action->setEnabled(false);
+    }
     statusBar()->showMessage(
         QStringLiteral(
             "Importing ETOPO elevation in the background · decoding, tiling and embedding numerical data…"
@@ -88,8 +89,9 @@ void MainWindow::import_etopo_elevation() {
             const ElevationImportResult imported = watcher->result();
             watcher->deleteLater();
             setProperty("aerisElevationImportBusy", false);
-            menuBar()->setEnabled(true);
-            layers_dock_->setEnabled(true);
+            if (auto* action = findChild<QAction*>(QStringLiteral("importEtopo2022ElevationAction"))) {
+                action->setEnabled(true);
+            }
 
             // The worker owns an independent ProjectStore handle. If this window
             // moved to another project while the task was finishing, never apply
