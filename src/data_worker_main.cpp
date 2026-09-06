@@ -7,6 +7,7 @@
 
 #include "aeris/storage/project.hpp"
 
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -31,13 +32,14 @@ void print_usage() {
     const std::string& diagnostic,
     const std::size_t detail_tiles = 0U
 ) {
+    std::cout
+        << (ok ? "AERIS_DATA_JOB_OK" : "AERIS_DATA_JOB_FAIL")
+        << " changed=" << (changed ? 1 : 0)
+        << " detail_tiles=" << detail_tiles << '\n';
     if (!ok) {
         std::cerr << diagnostic << '\n';
         return kImportFailure;
     }
-    std::cout
-        << "AERIS_DATA_JOB_OK changed=" << (changed ? 1 : 0)
-        << " detail_tiles=" << detail_tiles << '\n';
     return EXIT_SUCCESS;
 }
 
