@@ -3,17 +3,14 @@
 
 #include "main_window.hpp"
 
-#include "flag_pack_import.hpp"
+#include "data_job_process.hpp"
 
-#include <QAction>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
-#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QStatusBar>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <filesystem>
 #include <string>
@@ -30,9 +27,9 @@ namespace {
 }  // namespace
 
 void MainWindow::import_country_flags() {
-    if (property("aerisFlagImportBusy").toBool()) {
+    if (data_job_ != nullptr) {
         statusBar()->showMessage(
-            QStringLiteral("Country flag import is already running"),
+            QStringLiteral("Another project data job is already running"),
             2500
         );
         return;
@@ -68,32 +65,28 @@ void MainWindow::import_country_flags() {
         .toString(Qt::ISODate)
         .toStdString();
 
-    setProperty("aerisFlagImportBusy", true);
-    if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
-        action->setEnabled(false);
-    }
+    auto* job = new DataJobProcess(this);
+    data_job_ = job;
+    refresh_project_ui();
     statusBar()->showMessage(
         QStringLiteral(
-            "Importing country flags in the background · verifying and embedding resources…"
+            "Importing country flags in isolated data worker · map remains interactive…"
         )
     );
 
-    auto* watcher = new QFutureWatcher<FlagPackImportResult>(this);
-    connect(
-        watcher,
-        &QFutureWatcher<FlagPackImportResult>::finished,
-        this,
-        [this, watcher, project_path]() {
-            const FlagPackImportResult imported = watcher->result();
-            watcher->deleteLater();
-            setProperty("aerisFlagImportBusy", false);
-            if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
-                action->setEnabled(true);
-            }
+    const bool started = job->start(
+        "flags",
+        project_path,
+        pack_root,
+        modified_utc,
+        [this, job, project_path](DataJobResult imported) {
+            if (data_job_ == job) data_job_ = nullptr;
+            job->deleteLater();
+            refresh_project_ui();
 
-            // The worker owns an independent ProjectStore handle. A user may
-            // keep navigating or even open another project while the import is
-            // running; never apply stale UI/model state to a different project.
+            // The import process owns an independent ProjectStore. A user may
+            // navigate or open another project while it runs; never apply stale
+            // model/UI state to a different project.
             if (!project_ || project_->path() != project_path) {
                 statusBar()->showMessage(
                     imported.ok()
@@ -115,10 +108,6 @@ void MainWindow::import_country_flags() {
             }
 
             if (!imported.ok()) {
-                if (imported.changed) {
-                    load_render_model();
-                    refresh_project_ui();
-                }
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Country flag import failed"),
@@ -140,26 +129,16 @@ void MainWindow::import_country_flags() {
             );
         }
     );
-
-    watcher->setFuture(QtConcurrent::run(
-        [project_path, pack_root, modified_utc]() -> FlagPackImportResult {
-            storage::ProjectStoreResult opened = storage::ProjectStore::open(project_path);
-            if (!opened.ok()) {
-                return {
-                    false,
-                    false,
-                    0U,
-                    "could not reopen target .aeris project for background flag import: " +
-                        opened.status.diagnostic,
-                };
-            }
-            return import_country_flag_png_pack(
-                *opened.store,
-                pack_root,
-                modified_utc
-            );
-        }
-    ));
+    if (!started) {
+        if (data_job_ == job) data_job_ = nullptr;
+        job->deleteLater();
+        refresh_project_ui();
+        QMessageBox::critical(
+            this,
+            QStringLiteral("Country flag import failed to start"),
+            QStringLiteral("Could not launch the isolated AERIS data worker.")
+        );
+    }
 }
 
 }  // namespace aeris::desktop
