@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -134,6 +135,7 @@ private:
     void restore_active_viewport() noexcept;
     void dispatch_elevation_detail_requests();
     void accept_elevation_detail_results(
+        std::filesystem::path project_path,
         std::vector<ElevationDetailLoadResult> results);
     [[nodiscard]] static std::size_t viewport_index(view::SurfaceMode mode) noexcept;
 
