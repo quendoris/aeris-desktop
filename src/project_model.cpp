@@ -115,9 +115,6 @@ struct Rgb final {
     if (image.isNull()) return {};
 
     constexpr double microarcsec_per_degree = 3600.0 * 1000000.0;
-    const double lon_step_deg =
-        static_cast<double>(tile.longitude_step_microarcsec) /
-        microarcsec_per_degree;
     const double lat_step_deg =
         static_cast<double>(tile.latitude_step_microarcsec) /
         microarcsec_per_degree;
@@ -226,6 +223,7 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
     }
 
     auto model = std::make_shared<ProjectModel>();
+    model->project_path = project.path();
     model->layers = listed.records;
 
     std::unordered_set<std::string> source_ids;
