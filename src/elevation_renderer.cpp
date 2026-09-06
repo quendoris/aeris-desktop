@@ -35,6 +35,15 @@ constexpr std::int64_t kWestMicroarcsec =
 constexpr std::int64_t kNorthMicroarcsec =
     90LL * kMicroarcsecondsPerDegree;
 
+// Rasterization still happens synchronously in paintEvent in this CPU renderer.
+// Keep that work bounded independently of window size/zoom so navigation and
+// close/input events are not starved by hundreds of thousands of inverse
+// projection + terrain-style samples. Detail is more expensive per sample due
+// to numerical hillshade, so it gets the tighter budget. A later GPU/off-thread
+// renderer can raise presentation quality without weakening this UI contract.
+constexpr std::int64_t kOverviewRasterSampleBudget = 65536LL;
+constexpr std::int64_t kDetailRasterSampleBudget = 32768LL;
+
 struct Rgb final {
     double r{0.0};
     double g{0.0};
@@ -666,9 +675,25 @@ void rebuild_cache(
     cache.detail_lod_active = use_detail;
     if (use_detail) begin_detail_render_epoch(cache);
 
-    const int block = use_detail
+    int block = use_detail
         ? (zoom >= 8.0 ? 1 : 2)
         : (zoom >= 3.0 ? 2 : 4);
+    const std::int64_t sample_budget = use_detail
+        ? kDetailRasterSampleBudget
+        : kOverviewRasterSampleBudget;
+    const auto sample_count_for_block = [&](const int candidate) noexcept {
+        const std::int64_t width =
+            (static_cast<std::int64_t>(viewport.width()) + candidate - 1LL) /
+            candidate;
+        const std::int64_t height =
+            (static_cast<std::int64_t>(viewport.height()) + candidate - 1LL) /
+            candidate;
+        return width * height;
+    };
+    while (sample_count_for_block(block) > sample_budget) {
+        ++block;
+    }
+
     const int sample_width = std::max(1, (viewport.width() + block - 1) / block);
     const int sample_height = std::max(1, (viewport.height() + block - 1) / block);
     QImage image(sample_width, sample_height, QImage::Format_ARGB32_Premultiplied);
