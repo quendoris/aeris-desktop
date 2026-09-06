@@ -62,6 +62,15 @@ public:
         update();
     }
 
+    // Called as soon as the top-level window receives a close request. Stop
+    // scheduling paint/detail work before QObject destruction begins so close
+    // is a control boundary, not another event queued behind background work.
+    void prepare_shutdown() {
+        scene_request_callback_ = {};
+        elevation_detail_loader_.cancel();
+        setUpdatesEnabled(false);
+    }
+
     void clear_project();
 
     void set_scene_request_callback(SceneRequestCallback callback);
