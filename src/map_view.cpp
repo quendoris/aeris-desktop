@@ -398,7 +398,19 @@ void draw_layer_geometry(
 }  // namespace
 
 MapView::MapView(QWidget* parent)
-    : QWidget(parent) {
+    : QWidget(parent),
+      elevation_detail_loader_(this) {
+    elevation_detail_loader_.set_result_callback(
+        [this](
+            std::filesystem::path project_path,
+            std::vector<ElevationDetailLoadResult> results
+        ) {
+            accept_elevation_detail_results(
+                std::move(project_path),
+                std::move(results)
+            );
+        }
+    );
     setMinimumSize(720, 480);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -433,6 +445,7 @@ void MapView::set_project(
     std::string project_uuid,
     const std::uint64_t revision
 ) {
+    elevation_detail_loader_.cancel();
     model_ = std::move(model);
     project_uuid_ = std::move(project_uuid);
     revision_ = revision;
@@ -453,6 +466,7 @@ void MapView::set_project_model(
     std::shared_ptr<const ProjectModel> model,
     const std::uint64_t revision
 ) {
+    elevation_detail_loader_.cancel();
     model_ = std::move(model);
     revision_ = revision;
     has_frame_ = false;
@@ -463,6 +477,7 @@ void MapView::set_project_model(
 }
 
 void MapView::clear_project() {
+    elevation_detail_loader_.cancel();
     model_.reset();
     project_uuid_.clear();
     revision_ = 0U;
@@ -643,11 +658,9 @@ void MapView::paintEvent(QPaintEvent*) {
                 if (!layer.visible) continue;
 
                 // Numerical elevation participates in the same durable layer
-                // stack as vector content. The elevation layer has resource
-                // bindings rather than source bindings, so it must be composed
-                // explicitly at its stack position instead of as a later UI
-                // overlay. draw_elevation_overview() is a no-op for all other
-                // layer roles and preserves the active world transform.
+                // stack as vector content. This call is pure presentation: it
+                // samples overview/already-delivered detail and only records
+                // missing detail ids. Storage I/O is dispatched after painting.
                 draw_elevation_overview(
                     painter,
                     layer,
@@ -673,6 +686,7 @@ void MapView::paintEvent(QPaintEvent*) {
                     );
                 }
             }
+            dispatch_elevation_detail_requests();
         }
     }
 
@@ -705,6 +719,39 @@ void MapView::paintEvent(QPaintEvent*) {
                 .arg(zoom_, 0, 'f', 2)
         );
     }
+}
+
+void MapView::dispatch_elevation_detail_requests() {
+    const auto& resource_ids = elevation_detail_requests(elevation_surface_cache_);
+    if (!model_ || resource_ids.empty()) {
+        if (elevation_detail_loader_.busy()) elevation_detail_loader_.cancel();
+        return;
+    }
+    elevation_detail_loader_.request(model_->project_path, resource_ids);
+}
+
+void MapView::accept_elevation_detail_results(
+    std::filesystem::path project_path,
+    std::vector<ElevationDetailLoadResult> results
+) {
+    if (!model_ || model_->project_path != project_path) return;
+
+    bool changed = false;
+    for (ElevationDetailLoadResult& result : results) {
+        if (result.ok()) {
+            changed = accept_elevation_detail_tile(
+                elevation_surface_cache_,
+                std::move(result.resource_id),
+                std::move(*result.tile)
+            ) || changed;
+        } else {
+            reject_elevation_detail_resource(
+                elevation_surface_cache_,
+                result.resource_id
+            );
+        }
+    }
+    if (changed) update();
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
