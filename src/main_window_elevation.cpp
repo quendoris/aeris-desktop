@@ -3,17 +3,14 @@
 
 #include "main_window.hpp"
 
-#include "elevation_import.hpp"
+#include "data_job_process.hpp"
 
-#include <QAction>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
-#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QStatusBar>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <filesystem>
 #include <string>
@@ -30,9 +27,9 @@ namespace {
 }  // namespace
 
 void MainWindow::import_etopo_elevation() {
-    if (property("aerisElevationImportBusy").toBool()) {
+    if (data_job_ != nullptr) {
         statusBar()->showMessage(
-            QStringLiteral("ETOPO elevation import is already running"),
+            QStringLiteral("Another project data job is already running"),
             2500
         );
         return;
@@ -70,32 +67,25 @@ void MainWindow::import_etopo_elevation() {
         .toString(Qt::ISODate)
         .toStdString();
 
-    setProperty("aerisElevationImportBusy", true);
-    if (auto* action = findChild<QAction*>(QStringLiteral("importEtopo2022ElevationAction"))) {
-        action->setEnabled(false);
-    }
+    auto* job = new DataJobProcess(this);
+    data_job_ = job;
+    refresh_project_ui();
     statusBar()->showMessage(
         QStringLiteral(
-            "Importing ETOPO elevation in the background · decoding, tiling and embedding numerical data…"
+            "Importing ETOPO in isolated data worker · decoding, tiling and embedding while the map stays interactive…"
         )
     );
 
-    auto* watcher = new QFutureWatcher<ElevationImportResult>(this);
-    connect(
-        watcher,
-        &QFutureWatcher<ElevationImportResult>::finished,
-        this,
-        [this, watcher, project_path]() {
-            const ElevationImportResult imported = watcher->result();
-            watcher->deleteLater();
-            setProperty("aerisElevationImportBusy", false);
-            if (auto* action = findChild<QAction*>(QStringLiteral("importEtopo2022ElevationAction"))) {
-                action->setEnabled(true);
-            }
+    const bool started = job->start(
+        "etopo",
+        project_path,
+        tiff_path,
+        modified_utc,
+        [this, job, project_path](DataJobResult imported) {
+            if (data_job_ == job) data_job_ = nullptr;
+            job->deleteLater();
+            refresh_project_ui();
 
-            // The worker owns an independent ProjectStore handle. If this window
-            // moved to another project while the task was finishing, never apply
-            // stale model/UI state to the newly opened project.
             if (!project_ || project_->path() != project_path) {
                 statusBar()->showMessage(
                     imported.ok()
@@ -117,10 +107,6 @@ void MainWindow::import_etopo_elevation() {
             }
 
             if (!imported.ok()) {
-                if (imported.changed) {
-                    load_render_model();
-                    refresh_project_ui();
-                }
                 QMessageBox::critical(
                     this,
                     QStringLiteral("ETOPO elevation import failed"),
@@ -142,26 +128,16 @@ void MainWindow::import_etopo_elevation() {
             );
         }
     );
-
-    watcher->setFuture(QtConcurrent::run(
-        [project_path, tiff_path, modified_utc]() -> ElevationImportResult {
-            storage::ProjectStoreResult opened = storage::ProjectStore::open(project_path);
-            if (!opened.ok()) {
-                return {
-                    false,
-                    false,
-                    0U,
-                    "could not reopen target .aeris project for background elevation import: " +
-                        opened.status.diagnostic,
-                };
-            }
-            return import_etopo2022_global_60s(
-                *opened.store,
-                tiff_path,
-                modified_utc
-            );
-        }
-    ));
+    if (!started) {
+        if (data_job_ == job) data_job_ = nullptr;
+        job->deleteLater();
+        refresh_project_ui();
+        QMessageBox::critical(
+            this,
+            QStringLiteral("ETOPO elevation import failed to start"),
+            QStringLiteral("Could not launch the isolated AERIS data worker.")
+        );
+    }
 }
 
 }  // namespace aeris::desktop
