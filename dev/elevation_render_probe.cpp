@@ -27,12 +27,14 @@ namespace {
 
 constexpr double kProofCutDeg = 37.0;
 constexpr std::size_t kMinimumChangedPixels = 1000U;
+constexpr std::size_t kMinimumDetailSamples = 1000U;
 
 struct RenderProof final {
     QImage image;
     bool detail_lod_active{false};
     std::size_t detail_cached_tiles{0U};
     std::size_t detail_tile_loads{0U};
+    std::size_t detail_samples_used{0U};
     double zoom{1.0};
 };
 
@@ -109,6 +111,7 @@ struct RenderProof final {
     proof.detail_lod_active = view.elevation_detail_lod_active();
     proof.detail_cached_tiles = view.elevation_detail_cached_tiles();
     proof.detail_tile_loads = view.elevation_detail_tile_loads();
+    proof.detail_samples_used = view.elevation_detail_samples_used();
     proof.zoom = view.zoom_factor();
     view.hide();
     application.processEvents();
@@ -180,10 +183,10 @@ struct RenderProof final {
         return false;
     }
     if (overview.detail_lod_active || overview.detail_cached_tiles != 0U ||
-        overview.detail_tile_loads != 0U) {
+        overview.detail_tile_loads != 0U || overview.detail_samples_used != 0U) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
-            << " loaded detail tiles below the LOD threshold\n";
+            << " used detail elevation below the LOD threshold\n";
         return false;
     }
 
@@ -224,19 +227,22 @@ struct RenderProof final {
         detail.detail_cached_tiles == 0U ||
         detail.detail_cached_tiles > aeris::desktop::kElevationDetailCacheTileLimit ||
         detail.detail_tile_loads == 0U ||
-        detail.detail_tile_loads > aeris::desktop::kElevationDetailCacheTileLimit) {
+        detail.detail_tile_loads > aeris::desktop::kElevationDetailCacheTileLimit ||
+        detail.detail_samples_used < kMinimumDetailSamples) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
-            << " did not use a bounded durable detail cache at high zoom: active="
+            << " did not use bounded durable detail samples at high zoom: active="
             << detail.detail_lod_active
             << " zoom=" << detail.zoom
             << " cached=" << detail.detail_cached_tiles
-            << " loads=" << detail.detail_tile_loads << '\n';
+            << " loads=" << detail.detail_tile_loads
+            << " samples=" << detail.detail_samples_used << '\n';
         return false;
     }
     if (detail_without.detail_lod_active ||
         detail_without.detail_cached_tiles != 0U ||
-        detail_without.detail_tile_loads != 0U) {
+        detail_without.detail_tile_loads != 0U ||
+        detail_without.detail_samples_used != 0U) {
         std::cerr << "hidden elevation layer unexpectedly activated detail LOD\n";
         return false;
     }
@@ -247,7 +253,8 @@ struct RenderProof final {
         << " detail_changed=" << detail_changed
         << " detail_zoom=" << detail.zoom
         << " cached_tiles=" << detail.detail_cached_tiles
-        << " tile_loads=" << detail.detail_tile_loads << '\n';
+        << " tile_loads=" << detail.detail_tile_loads
+        << " detail_samples=" << detail.detail_samples_used << '\n';
     return true;
 }
 
