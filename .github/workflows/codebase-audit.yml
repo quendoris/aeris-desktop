@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 quendoris
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: AERIS codebase audit
+
+on:
+  push:
+    branches: [audit/codebase-stats]
+
+permissions:
+  contents: read
+
+jobs:
+  stats:
+    name: Count tracked AERIS text
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Desktop audit branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout exact active Core dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: quendoris/aeris-core
+          ref: 533b5af0ed8d641c2517136009bd20e298d636c4
+          path: aeris-core
+
+      - name: Checkout current Android stack head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: quendoris/aeris-android
+          ref: 4bca659f9eb5c91efbbe23ede3c3c601b24f3331
+          path: aeris-android
+
+      - name: Count code, probes, specifications and documentation
+        run: >-
+          python3 tools/codebase_stats.py
+          --repo desktop=.
+          --repo core=aeris-core
+          --repo android=aeris-android
+          --top 30
+          --json-out codebase-stats.json
+
+      - name: Upload machine-readable audit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeris-codebase-stats
+          path: codebase-stats.json
+          if-no-files-found: error
+          retention-days: 14
