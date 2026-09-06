@@ -438,6 +438,7 @@ void MapView::set_project(
     revision_ = revision;
     has_frame_ = false;
     frame_error_.clear();
+    elevation_surface_cache_ = {};
     mode_ = view::SurfaceMode::globe;
     longitude_deg_ = 15.0;
     latitude_deg_ = 20.0;
@@ -456,6 +457,7 @@ void MapView::set_project_model(
     revision_ = revision;
     has_frame_ = false;
     frame_error_.clear();
+    elevation_surface_cache_ = {};
     update();
     request_scene(view::SceneQuality::verified);
 }
@@ -467,6 +469,7 @@ void MapView::clear_project() {
     has_frame_ = false;
     frame_ = {};
     frame_error_.clear();
+    elevation_surface_cache_ = {};
     busy_ = false;
     mode_ = view::SurfaceMode::globe;
     projection_central_meridian_deg_ = 0.0;
@@ -638,6 +641,23 @@ void MapView::paintEvent(QPaintEvent*) {
                  layer_it != model_->layers.rend(); ++layer_it) {
                 const storage::ProjectLayerRecord& layer = *layer_it;
                 if (!layer.visible) continue;
+
+                // Numerical elevation participates in the same durable layer
+                // stack as vector content. The elevation layer has resource
+                // bindings rather than source bindings, so it must be composed
+                // explicitly at its stack position instead of as a later UI
+                // overlay. draw_elevation_overview() is a no-op for all other
+                // layer roles and preserves the active world transform.
+                draw_elevation_overview(
+                    painter,
+                    layer,
+                    frame_,
+                    *model_,
+                    zoom_,
+                    viewport_pan_,
+                    elevation_surface_cache_
+                );
+
                 for (const storage::LayerSourceBinding& binding : layer.sources) {
                     const auto scene_it = frame_.source_scenes.find(binding.source_id);
                     const auto source_it = model_->sources.find(binding.source_id);
