@@ -5,15 +5,18 @@
 
 #include "flag_pack_import.hpp"
 
-#include <QApplication>
+#include <QAction>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
+#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <filesystem>
+#include <string>
 
 namespace aeris::desktop {
 namespace {
@@ -27,6 +30,13 @@ namespace {
 }  // namespace
 
 void MainWindow::import_country_flags() {
+    if (property("aerisFlagImportBusy").toBool()) {
+        statusBar()->showMessage(
+            QStringLiteral("Country flag import is already running"),
+            2500
+        );
+        return;
+    }
     if (!project_ || !model_ || model_->sources.empty()) {
         QMessageBox::information(
             this,
@@ -52,42 +62,104 @@ void MainWindow::import_country_flags() {
     );
     if (selected.isEmpty()) return;
 
-    statusBar()->showMessage(
-        QStringLiteral("Verifying and embedding country flags into .aeris…")
-    );
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    const FlagPackImportResult imported = import_country_flag_png_pack(
-        *project_,
-        filesystem_path_from_qt_flags(selected),
-        QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString()
-    );
-    QApplication::restoreOverrideCursor();
+    const std::filesystem::path project_path = project_->path();
+    const std::filesystem::path pack_root = filesystem_path_from_qt_flags(selected);
+    const std::string modified_utc = QDateTime::currentDateTimeUtc()
+        .toString(Qt::ISODate)
+        .toStdString();
 
-    if (!imported.ok()) {
-        if (imported.changed) {
-            project_->refresh_metadata();
-            load_render_model();
-            refresh_project_ui();
-        }
-        QMessageBox::critical(
-            this,
-            QStringLiteral("Country flag import failed"),
-            QString::fromStdString(imported.diagnostic)
-        );
-        return;
+    setProperty("aerisFlagImportBusy", true);
+    if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
+        action->setEnabled(false);
     }
-
-    if (!load_render_model()) return;
-    refresh_project_ui();
-    layers_dock_->show();
     statusBar()->showMessage(
-        imported.changed
-            ? QStringLiteral(
-                "Country flags embedded in .aeris · source pack is no longer required"
-              )
-            : QStringLiteral("Country flag pack is already present in this project"),
-        6500
+        QStringLiteral(
+            "Importing country flags in the background · verifying and embedding resources…"
+        )
     );
+
+    auto* watcher = new QFutureWatcher<FlagPackImportResult>(this);
+    connect(
+        watcher,
+        &QFutureWatcher<FlagPackImportResult>::finished,
+        this,
+        [this, watcher, project_path]() {
+            const FlagPackImportResult imported = watcher->result();
+            watcher->deleteLater();
+            setProperty("aerisFlagImportBusy", false);
+            if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
+                action->setEnabled(true);
+            }
+
+            // The worker owns an independent ProjectStore handle. A user may
+            // keep navigating or even open another project while the import is
+            // running; never apply stale UI/model state to a different project.
+            if (!project_ || project_->path() != project_path) {
+                statusBar()->showMessage(
+                    imported.ok()
+                        ? QStringLiteral("Country flag import finished in its original .aeris project")
+                        : QStringLiteral("Country flag import failed in its original .aeris project"),
+                    5000
+                );
+                return;
+            }
+
+            const storage::Status refreshed = project_->refresh_metadata();
+            if (!refreshed.ok()) {
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("Country flag metadata reload failed"),
+                    QString::fromStdString(refreshed.diagnostic)
+                );
+                return;
+            }
+
+            if (!imported.ok()) {
+                if (imported.changed) {
+                    load_render_model();
+                    refresh_project_ui();
+                }
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("Country flag import failed"),
+                    QString::fromStdString(imported.diagnostic)
+                );
+                return;
+            }
+
+            if (!load_render_model()) return;
+            refresh_project_ui();
+            layers_dock_->show();
+            statusBar()->showMessage(
+                imported.changed
+                    ? QStringLiteral(
+                        "Country flags embedded in .aeris · source pack is no longer required"
+                      )
+                    : QStringLiteral("Country flag pack is already present in this project"),
+                6500
+            );
+        }
+    );
+
+    watcher->setFuture(QtConcurrent::run(
+        [project_path, pack_root, modified_utc]() -> FlagPackImportResult {
+            storage::ProjectStoreResult opened = storage::ProjectStore::open(project_path);
+            if (!opened.ok()) {
+                return {
+                    false,
+                    false,
+                    0U,
+                    "could not reopen target .aeris project for background flag import: " +
+                        opened.status.diagnostic,
+                };
+            }
+            return import_country_flag_png_pack(
+                *opened.store,
+                pack_root,
+                modified_utc
+            );
+        }
+    ));
 }
 
 }  // namespace aeris::desktop
