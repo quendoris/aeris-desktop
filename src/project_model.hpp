@@ -10,6 +10,7 @@
 #include <QImage>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -29,6 +30,12 @@ struct EmbeddedProjectResource final {
 };
 
 struct ProjectModel final {
+    // Machine-local location of the already-open durable project. It is not
+    // serialized into .aeris. The renderer uses this only to open a separate
+    // read handle for viewport-bounded lazy resources such as elevation detail
+    // tiles; canonical sources and eagerly required resources remain reconstructed
+    // above this boundary as before.
+    std::filesystem::path project_path;
     std::vector<storage::ProjectLayerRecord> layers;
     std::unordered_map<std::string, std::shared_ptr<const source::Result>> sources;
     std::unordered_map<std::string, std::shared_ptr<const EmbeddedProjectResource>> resources;
