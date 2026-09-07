@@ -15,6 +15,7 @@ int main(int argc, char** argv) {
     aeris::desktop::MainWindow window;
     aeris::desktop::install_country_flag_import_action(window);
     aeris::desktop::install_elevation_import_action(window);
+    window.open_startup_world();
     window.show();
     return application.exec();
 }
