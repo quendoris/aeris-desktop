@@ -13,18 +13,22 @@
 #include <QAction>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QTreeWidget>
@@ -68,6 +72,14 @@ QLabel* selectable_value(QWidget* parent) {
         path += QStringLiteral(".aeris");
     }
     return path;
+}
+
+[[nodiscard]] std::filesystem::path base_world_cache_path() {
+    const QString cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (cache_root.isEmpty()) return {};
+    return filesystem_path_from_qt(
+        QDir(cache_root).filePath(QStringLiteral("natural-earth-v5.1.2"))
+    );
 }
 
 }  // namespace
@@ -133,11 +145,25 @@ void MainWindow::build_ui() {
     connect(exit_action, &QAction::triggered, this, &QWidget::close);
 
     auto* data_menu = menuBar()->addMenu(QStringLiteral("&Data"));
+    install_base_world_action_ = data_menu->addAction(
+        QStringLiteral("Install / repair base political world")
+    );
+    install_base_world_action_->setToolTip(QStringLiteral(
+        "Acquire the exact pinned Natural Earth base map automatically, verify every resource, and commit it into the current .aeris project"
+    ));
+    connect(
+        install_base_world_action_,
+        &QAction::triggered,
+        this,
+        &MainWindow::install_base_world
+    );
+
+    data_menu->addSeparator();
     import_world_data_action_ = data_menu->addAction(
-        QStringLiteral("Import downloaded Natural Earth world…")
+        QStringLiteral("Import local Natural Earth snapshot…")
     );
     import_world_data_action_->setToolTip(QStringLiteral(
-        "Import separately downloaded exact Natural Earth v5.1.2 110m files into the current .aeris project"
+        "Advanced/offline fallback: import an already acquired exact Natural Earth v5.1.2 110m snapshot"
     ));
     connect(
         import_world_data_action_,
@@ -336,6 +362,34 @@ void MainWindow::build_ui() {
     inspector_dock_->hide();
     view_menu->addAction(inspector_dock_->toggleViewAction());
 
+    data_job_widget_ = new QWidget(statusBar());
+    data_job_widget_->setObjectName(QStringLiteral("dataJobStrip"));
+    auto* data_job_layout = new QHBoxLayout(data_job_widget_);
+    data_job_layout->setContentsMargins(8, 1, 4, 1);
+    data_job_layout->setSpacing(7);
+    data_job_label_ = new QLabel(QStringLiteral("Preparing data…"), data_job_widget_);
+    data_job_label_->setMinimumWidth(220);
+    data_job_progress_ = new QProgressBar(data_job_widget_);
+    data_job_progress_->setFixedWidth(180);
+    data_job_progress_->setTextVisible(true);
+    data_job_progress_->setRange(0, 0);
+    data_job_cancel_button_ = new QPushButton(QStringLiteral("Cancel"), data_job_widget_);
+    data_job_cancel_button_->setToolTip(QStringLiteral(
+        "Stop this data job immediately. Verified downloaded bytes are kept for resume."
+    ));
+    data_job_layout->addWidget(data_job_label_);
+    data_job_layout->addWidget(data_job_progress_);
+    data_job_layout->addWidget(data_job_cancel_button_);
+    data_job_widget_->hide();
+    statusBar()->addPermanentWidget(data_job_widget_);
+    connect(data_job_cancel_button_, &QPushButton::clicked, this, [this]() {
+        if (data_job_ == nullptr) return;
+        data_job_cancel_button_->setEnabled(false);
+        data_job_label_->setText(QStringLiteral("Cancelling…"));
+        data_job_progress_->setRange(0, 0);
+        data_job_->request_cancel();
+    });
+
     statusBar()->showMessage(QStringLiteral("Ready"));
 }
 
@@ -352,6 +406,8 @@ void MainWindow::apply_theme() {
         QPushButton:disabled, QComboBox:disabled, QSlider:disabled, QLabel:disabled { color: #737982; }
         QSlider::groove:horizontal { height: 4px; background: #343941; border-radius: 2px; }
         QSlider::handle:horizontal { width: 14px; margin: -5px 0; background: #b7c0ca; border-radius: 7px; }
+        QProgressBar { background: #17191c; border: 1px solid #3a4049; border-radius: 4px; min-height: 14px; text-align: center; }
+        QProgressBar::chunk { background: #586b7f; border-radius: 3px; }
         QTreeWidget { background: #1b1e22; border: none; outline: none; }
         QTreeWidget::item { padding: 6px 4px; }
         QTreeWidget::item:selected { background: #303640; }
@@ -424,10 +480,7 @@ void MainWindow::new_project() {
     }
 
     refresh_project_ui();
-    statusBar()->showMessage(
-        QStringLiteral("Empty durable .aeris project created · add data from the Data menu"),
-        6000
-    );
+    install_base_world();
 }
 
 void MainWindow::open_project() {
@@ -461,7 +514,11 @@ void MainWindow::open_project() {
     }
 
     refresh_project_ui();
-    statusBar()->showMessage(QStringLiteral("Opening durable AERIS map…"), 3500);
+    if (model_ && model_->sources.empty() && !project_->metadata().frozen) {
+        install_base_world();
+    } else {
+        statusBar()->showMessage(QStringLiteral("Opening durable AERIS map…"), 3500);
+    }
 }
 
 void MainWindow::close_project() {
@@ -474,6 +531,155 @@ void MainWindow::close_project() {
     rebuild_layer_tree();
     refresh_project_ui();
     statusBar()->showMessage(QStringLiteral("Project closed"), 2000);
+}
+
+void MainWindow::begin_data_job_ui(
+    DataJobProcess* job,
+    const QString& initial_phase
+) {
+    if (job == nullptr) return;
+    data_job_label_->setText(initial_phase);
+    data_job_progress_->setRange(0, 0);
+    data_job_progress_->setValue(0);
+    data_job_cancel_button_->setEnabled(true);
+    data_job_widget_->show();
+
+    job->set_progress_callback([this, job](const DataJobProgress& progress) {
+        if (data_job_ != job) return;
+        if (!progress.phase.empty()) {
+            data_job_label_->setText(QString::fromStdString(progress.phase));
+        }
+        const int percent = progress.percent();
+        if (percent < 0) {
+            data_job_progress_->setRange(0, 0);
+        } else {
+            data_job_progress_->setRange(0, 100);
+            data_job_progress_->setValue(percent);
+        }
+    });
+}
+
+void MainWindow::finish_data_job_ui(DataJobProcess* job) {
+    if (data_job_ != job) return;
+    data_job_widget_->hide();
+    data_job_progress_->setRange(0, 0);
+    data_job_progress_->setValue(0);
+    data_job_cancel_button_->setEnabled(true);
+}
+
+void MainWindow::install_base_world() {
+    if (data_job_ != nullptr) {
+        statusBar()->showMessage(
+            QStringLiteral("Another project data job is already running"),
+            2500
+        );
+        return;
+    }
+    if (!project_) return;
+    if (project_->metadata().frozen) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Project is frozen"),
+            QStringLiteral("Thaw or copy the project before adding base world data.")
+        );
+        return;
+    }
+
+    const std::filesystem::path cache_root = base_world_cache_path();
+    if (cache_root.empty()) {
+        QMessageBox::critical(
+            this,
+            QStringLiteral("Base world acquisition unavailable"),
+            QStringLiteral("Qt could not resolve a writable application cache directory.")
+        );
+        return;
+    }
+
+    const std::filesystem::path project_path = project_->path();
+    auto* job = new DataJobProcess(this);
+    data_job_ = job;
+    begin_data_job_ui(job, QStringLiteral("Preparing base political world…"));
+    refresh_project_ui();
+    statusBar()->showMessage(
+        QStringLiteral("Base world acquisition is running in an isolated worker · the interface remains available")
+    );
+
+    const bool started = job->start(
+        "world-auto",
+        project_path,
+        cache_root,
+        utc_now(),
+        [this, job, project_path](DataJobResult result) {
+            finish_data_job_ui(job);
+            if (data_job_ == job) data_job_ = nullptr;
+            job->deleteLater();
+            refresh_project_ui();
+
+            if (!project_ || project_->path() != project_path) {
+                statusBar()->showMessage(
+                    result.cancelled
+                        ? QStringLiteral("Base world job cancelled · verified cache bytes were retained")
+                        : (result.ok()
+                            ? QStringLiteral("Base world committed to its original .aeris project")
+                            : QStringLiteral("Base world job failed in its original .aeris project")),
+                    5500
+                );
+                return;
+            }
+
+            const storage::Status refreshed = project_->refresh_metadata();
+            if (!refreshed.ok()) {
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("Base world metadata reload failed"),
+                    QString::fromStdString(refreshed.diagnostic)
+                );
+                return;
+            }
+
+            // A killed worker may have completed earlier short SQLite
+            // transactions even though no final result marker reached stdout.
+            // Always reconcile the current project after interactive cancel or
+            // failure instead of trusting an in-process changed flag.
+            if (!load_render_model()) return;
+            refresh_project_ui();
+
+            if (result.cancelled) {
+                statusBar()->showMessage(
+                    QStringLiteral("Base world job cancelled · partial download retained for automatic resume"),
+                    6500
+                );
+                return;
+            }
+            if (!result.ok()) {
+                QMessageBox::warning(
+                    this,
+                    QStringLiteral("Base world is not ready"),
+                    QString::fromStdString(result.diagnostic)
+                );
+                return;
+            }
+
+            layers_dock_->show();
+            statusBar()->showMessage(
+                result.changed
+                    ? QStringLiteral("Base political world verified and committed to .aeris")
+                    : QStringLiteral("Base political world is already present and verified"),
+                6500
+            );
+        }
+    );
+    if (!started) {
+        finish_data_job_ui(job);
+        if (data_job_ == job) data_job_ = nullptr;
+        job->deleteLater();
+        refresh_project_ui();
+        QMessageBox::critical(
+            this,
+            QStringLiteral("Base world acquisition failed to start"),
+            QStringLiteral("Could not launch the isolated AERIS data worker.")
+        );
+    }
 }
 
 void MainWindow::import_world_data() {
@@ -496,7 +702,7 @@ void MainWindow::import_world_data() {
 
     const QString selected = QFileDialog::getExistingDirectory(
         this,
-        QStringLiteral("Select downloaded Natural Earth v5.1.2 110m directory")
+        QStringLiteral("Select local Natural Earth v5.1.2 110m snapshot")
     );
     if (selected.isEmpty()) return;
 
@@ -506,6 +712,7 @@ void MainWindow::import_world_data() {
 
     auto* job = new DataJobProcess(this);
     data_job_ = job;
+    begin_data_job_ui(job, QStringLiteral("Importing local Natural Earth snapshot…"));
     refresh_project_ui();
     statusBar()->showMessage(
         QStringLiteral(
@@ -519,15 +726,18 @@ void MainWindow::import_world_data() {
         source_root,
         modified_utc,
         [this, job, project_path](DataJobResult imported) {
+            finish_data_job_ui(job);
             if (data_job_ == job) data_job_ = nullptr;
             job->deleteLater();
             refresh_project_ui();
 
             if (!project_ || project_->path() != project_path) {
                 statusBar()->showMessage(
-                    imported.ok()
-                        ? QStringLiteral("Natural Earth import finished in its original .aeris project")
-                        : QStringLiteral("Natural Earth import failed in its original .aeris project"),
+                    imported.cancelled
+                        ? QStringLiteral("Natural Earth import cancelled in its original .aeris project")
+                        : (imported.ok()
+                            ? QStringLiteral("Natural Earth import finished in its original .aeris project")
+                            : QStringLiteral("Natural Earth import failed in its original .aeris project")),
                     5000
                 );
                 return;
@@ -543,6 +753,15 @@ void MainWindow::import_world_data() {
                 return;
             }
 
+            if (imported.cancelled) {
+                load_render_model();
+                refresh_project_ui();
+                statusBar()->showMessage(
+                    QStringLiteral("Natural Earth import cancelled · durable committed state reconciled"),
+                    5500
+                );
+                return;
+            }
             if (!imported.ok()) {
                 if (imported.changed) {
                     load_render_model();
@@ -568,6 +787,7 @@ void MainWindow::import_world_data() {
         }
     );
     if (!started) {
+        finish_data_job_ui(job);
         if (data_job_ == job) data_job_ = nullptr;
         job->deleteLater();
         refresh_project_ui();
@@ -710,6 +930,7 @@ void MainWindow::refresh_project_ui() {
         has_project && !project_->metadata().frozen && data_job_ == nullptr;
 
     close_project_action_->setEnabled(has_project);
+    install_base_world_action_->setEnabled(can_write_project_data);
     import_world_data_action_->setEnabled(can_write_project_data);
     if (auto* action = findChild<QAction*>(QStringLiteral("importCountryFlagsAction"))) {
         action->setEnabled(can_write_project_data && has_map_data);
@@ -746,7 +967,7 @@ void MainWindow::refresh_project_ui() {
         metadata.frozen
             ? QStringLiteral("Frozen")
             : (has_map_data ? QStringLiteral("Editable · world data")
-                            : QStringLiteral("Editable · empty"))
+                            : QStringLiteral("Editable · base world pending"))
     );
 }
 
