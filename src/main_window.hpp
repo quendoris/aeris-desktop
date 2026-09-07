@@ -7,6 +7,7 @@
 #include "scene_controller.hpp"
 
 #include <QMainWindow>
+#include <QString>
 
 #include <memory>
 
@@ -15,10 +16,12 @@ class QCloseEvent;
 class QComboBox;
 class QDockWidget;
 class QLabel;
+class QProgressBar;
 class QPushButton;
 class QSlider;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QWidget;
 
 namespace aeris::desktop {
 
@@ -45,7 +48,10 @@ private:
     void new_project();
     void open_project();
     void close_project();
+    void install_base_world();
     void import_world_data();
+    void begin_data_job_ui(DataJobProcess* job, const QString& initial_phase);
+    void finish_data_job_ui(DataJobProcess* job);
     void refresh_project_ui();
     void refresh_unfold_controls();
     bool load_render_model();
@@ -69,7 +75,12 @@ private:
     QLabel* project_format_value_{nullptr};
     QLabel* project_projection_value_{nullptr};
     QLabel* project_state_value_{nullptr};
+    QWidget* data_job_widget_{nullptr};
+    QLabel* data_job_label_{nullptr};
+    QProgressBar* data_job_progress_{nullptr};
+    QPushButton* data_job_cancel_button_{nullptr};
     QAction* close_project_action_{nullptr};
+    QAction* install_base_world_action_{nullptr};
     QAction* import_world_data_action_{nullptr};
     QAction* zoom_in_action_{nullptr};
     QAction* zoom_out_action_{nullptr};
