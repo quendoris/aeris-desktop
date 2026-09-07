@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network)
 find_package(TIFF REQUIRED)
 
 set(AERIS_CORE_SOURCE_DIR "" CACHE PATH "Path to a local aeris-core checkout")
@@ -34,6 +34,7 @@ add_subdirectory("${AERIS_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/aeris-core")
 add_executable(aeris-desktop
     src/data_job_process.cpp
     src/data_job_process.hpp
+    src/data_job_progress.hpp
     src/elevation_detail_loader.cpp
     src/elevation_detail_loader.hpp
     src/elevation_import.cpp
@@ -87,10 +88,12 @@ set_target_properties(aeris-desktop PROPERTIES
     MACOSX_BUNDLE ON
 )
 
-# Long acquisition/import work belongs outside the GUI process. The first
-# worker slice intentionally exposes only the already-existing local import
-# operations; later download/resume adapters can use the same process boundary.
+# Long acquisition/import work belongs outside the GUI process. Network access
+# is intentionally confined to this worker; the renderer/core remain network-
+# free. Exact immutable URLs and SHA-256 verification are applied before source
+# adapters see acquired bytes.
 add_executable(aeris-data-worker
+    src/data_job_progress.hpp
     src/data_worker_main.cpp
     src/elevation_import.cpp
     src/elevation_import.hpp
@@ -99,6 +102,8 @@ add_executable(aeris-data-worker
     src/elevation_tiff_inspect.cpp
     src/flag_pack_import.cpp
     src/flag_pack_import.hpp
+    src/natural_earth_acquisition.cpp
+    src/natural_earth_acquisition.hpp
     src/world_data_import.cpp
     src/world_data_import.hpp
 )
@@ -110,6 +115,8 @@ target_link_libraries(aeris-data-worker PRIVATE
     AERIS::storage
     AERIS::project
     TIFF::TIFF
+    Qt6::Core
+    Qt6::Network
 )
 target_compile_features(aeris-data-worker PRIVATE cxx_std_17)
 set_target_properties(aeris-data-worker PROPERTIES CXX_EXTENSIONS OFF)
