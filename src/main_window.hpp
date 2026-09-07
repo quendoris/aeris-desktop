@@ -34,6 +34,13 @@ class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+    // Open the application-owned starter .aeris. During source-development the
+    // file is created lazily in application data and populated through the same
+    // verified acquisition/import path as a user project. A packaged release
+    // may ship an already-populated starter without changing this ownership
+    // boundary.
+    void open_startup_world();
+
     // Public UI commands so optional data-pack integrations can add themselves
     // to the Data menu without taking ownership of project/storage internals.
     void import_country_flags();
