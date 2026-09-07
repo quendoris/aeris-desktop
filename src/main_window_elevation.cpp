@@ -39,7 +39,7 @@ void MainWindow::import_etopo_elevation() {
             this,
             QStringLiteral("Elevation needs a world project"),
             QStringLiteral(
-                "Create or open a project and import the Natural Earth world data first."
+                "Create or open a project and let AERIS prepare the base political world first."
             )
         );
         return;
@@ -69,10 +69,11 @@ void MainWindow::import_etopo_elevation() {
 
     auto* job = new DataJobProcess(this);
     data_job_ = job;
+    begin_data_job_ui(job, QStringLiteral("Decoding, tiling and embedding ETOPO elevation…"));
     refresh_project_ui();
     statusBar()->showMessage(
         QStringLiteral(
-            "Importing ETOPO in isolated data worker · decoding, tiling and embedding while the map stays interactive…"
+            "Importing ETOPO in isolated data worker · the map remains interactive…"
         )
     );
 
@@ -82,15 +83,18 @@ void MainWindow::import_etopo_elevation() {
         tiff_path,
         modified_utc,
         [this, job, project_path](DataJobResult imported) {
+            finish_data_job_ui(job);
             if (data_job_ == job) data_job_ = nullptr;
             job->deleteLater();
             refresh_project_ui();
 
             if (!project_ || project_->path() != project_path) {
                 statusBar()->showMessage(
-                    imported.ok()
-                        ? QStringLiteral("ETOPO import finished in its original .aeris project")
-                        : QStringLiteral("ETOPO import failed in its original .aeris project"),
+                    imported.cancelled
+                        ? QStringLiteral("ETOPO import cancelled in its original .aeris project")
+                        : (imported.ok()
+                            ? QStringLiteral("ETOPO import finished in its original .aeris project")
+                            : QStringLiteral("ETOPO import failed in its original .aeris project")),
                     5000
                 );
                 return;
@@ -102,6 +106,16 @@ void MainWindow::import_etopo_elevation() {
                     this,
                     QStringLiteral("Elevation import metadata reload failed"),
                     QString::fromStdString(refreshed.diagnostic)
+                );
+                return;
+            }
+
+            if (imported.cancelled) {
+                load_render_model();
+                refresh_project_ui();
+                statusBar()->showMessage(
+                    QStringLiteral("ETOPO import cancelled · durable committed state reconciled"),
+                    5500
                 );
                 return;
             }
@@ -133,6 +147,7 @@ void MainWindow::import_etopo_elevation() {
         }
     );
     if (!started) {
+        finish_data_job_ui(job);
         if (data_job_ == job) data_job_ = nullptr;
         job->deleteLater();
         refresh_project_ui();
