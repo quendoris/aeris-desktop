@@ -39,7 +39,7 @@ void MainWindow::import_country_flags() {
             this,
             QStringLiteral("Country flags need political data"),
             QStringLiteral(
-                "Create or open a project and import the Natural Earth world data first."
+                "Create or open a project and let AERIS prepare the base political world first."
             )
         );
         return;
@@ -55,7 +55,7 @@ void MainWindow::import_country_flags() {
 
     const QString selected = QFileDialog::getExistingDirectory(
         this,
-        QStringLiteral("Select downloaded ISO country flag PNG pack")
+        QStringLiteral("Select local ISO country flag PNG pack")
     );
     if (selected.isEmpty()) return;
 
@@ -67,6 +67,7 @@ void MainWindow::import_country_flags() {
 
     auto* job = new DataJobProcess(this);
     data_job_ = job;
+    begin_data_job_ui(job, QStringLiteral("Verifying and embedding country flags…"));
     refresh_project_ui();
     statusBar()->showMessage(
         QStringLiteral(
@@ -80,6 +81,7 @@ void MainWindow::import_country_flags() {
         pack_root,
         modified_utc,
         [this, job, project_path](DataJobResult imported) {
+            finish_data_job_ui(job);
             if (data_job_ == job) data_job_ = nullptr;
             job->deleteLater();
             refresh_project_ui();
@@ -89,9 +91,11 @@ void MainWindow::import_country_flags() {
             // model/UI state to a different project.
             if (!project_ || project_->path() != project_path) {
                 statusBar()->showMessage(
-                    imported.ok()
-                        ? QStringLiteral("Country flag import finished in its original .aeris project")
-                        : QStringLiteral("Country flag import failed in its original .aeris project"),
+                    imported.cancelled
+                        ? QStringLiteral("Country flag import cancelled in its original .aeris project")
+                        : (imported.ok()
+                            ? QStringLiteral("Country flag import finished in its original .aeris project")
+                            : QStringLiteral("Country flag import failed in its original .aeris project")),
                     5000
                 );
                 return;
@@ -103,6 +107,16 @@ void MainWindow::import_country_flags() {
                     this,
                     QStringLiteral("Country flag metadata reload failed"),
                     QString::fromStdString(refreshed.diagnostic)
+                );
+                return;
+            }
+
+            if (imported.cancelled) {
+                load_render_model();
+                refresh_project_ui();
+                statusBar()->showMessage(
+                    QStringLiteral("Country flag import cancelled · durable committed state reconciled"),
+                    5500
                 );
                 return;
             }
@@ -134,6 +148,7 @@ void MainWindow::import_country_flags() {
         }
     );
     if (!started) {
+        finish_data_job_ui(job);
         if (data_job_ == job) data_job_ = nullptr;
         job->deleteLater();
         refresh_project_ui();
