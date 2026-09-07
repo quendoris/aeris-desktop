@@ -4,7 +4,6 @@
 #pragma once
 
 #include "aeris/storage/project.hpp"
-#include "data_job_progress.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -30,8 +29,6 @@ struct FlagPackImportResult final {
 [[nodiscard]] FlagPackImportResult import_country_flag_png_pack(
     storage::ProjectStore& project,
     const std::filesystem::path& pack_root,
-    std::string_view modified_utc,
-    const DataJobProgressCallback& progress = {}
-);
+    std::string_view modified_utc);
 
 }  // namespace aeris::desktop
