@@ -11,11 +11,14 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QVariant>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
