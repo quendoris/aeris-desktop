@@ -8,6 +8,7 @@
 #include <QProcess>
 #include <QStringList>
 
+#include <cstdint>
 #include <utility>
 
 namespace aeris::desktop {
@@ -28,12 +29,33 @@ namespace {
     return QDir(QCoreApplication::applicationDirPath()).filePath(executable);
 }
 
+[[nodiscard]] bool parse_unsigned_field(
+    const QByteArray& line,
+    const QByteArray& key,
+    std::uint64_t& value
+) {
+    const int position = line.indexOf(key);
+    if (position < 0) return false;
+    const int first = position + key.size();
+    int last = line.indexOf(' ', first);
+    if (last < 0) last = line.size();
+    bool ok = false;
+    const qulonglong parsed = line.mid(first, last - first).toULongLong(&ok);
+    if (!ok) return false;
+    value = static_cast<std::uint64_t>(parsed);
+    return true;
+}
+
 }  // namespace
 
 DataJobProcess::DataJobProcess(QObject* parent)
     : QObject(parent),
       process_(new QProcess(this)) {
     process_->setProcessChannelMode(QProcess::SeparateChannels);
+
+    connect(process_, &QProcess::readyReadStandardOutput, this, [this]() {
+        consume_stdout(false);
+    });
 
     connect(
         process_,
@@ -42,6 +64,7 @@ DataJobProcess::DataJobProcess(QObject* parent)
         [this](const QProcess::ProcessError error) {
             if (error != QProcess::FailedToStart || completed_) return;
             finish_once({
+                false,
                 false,
                 false,
                 "could not start aeris-data-worker: " +
@@ -56,11 +79,19 @@ DataJobProcess::DataJobProcess(QObject* parent)
         this,
         [this](const int exit_code, const QProcess::ExitStatus exit_status) {
             if (completed_) return;
-            const QByteArray standard_output = process_->readAllStandardOutput();
+            consume_stdout(true);
             const QByteArray standard_error = process_->readAllStandardError();
-            const bool changed = standard_output.contains("changed=1");
+            const bool changed = stdout_buffer_.contains("changed=1");
+
+            if (cancel_requested_) {
+                std::string diagnostic = standard_error.trimmed().toStdString();
+                if (diagnostic.empty()) diagnostic = "data job cancelled";
+                finish_once({false, changed, true, std::move(diagnostic)});
+                return;
+            }
+
             const bool protocol_ok =
-                standard_output.contains("AERIS_DATA_JOB_OK") &&
+                stdout_buffer_.contains("AERIS_DATA_JOB_OK") &&
                 exit_status == QProcess::NormalExit &&
                 exit_code == 0;
             if (!protocol_ok) {
@@ -68,16 +99,17 @@ DataJobProcess::DataJobProcess(QObject* parent)
                 if (diagnostic.empty()) {
                     diagnostic = "aeris-data-worker exited without a successful result";
                 }
-                finish_once({false, changed, std::move(diagnostic)});
+                finish_once({false, changed, false, std::move(diagnostic)});
                 return;
             }
-            finish_once({true, changed, {}});
+            finish_once({true, changed, false, {}});
         }
     );
 }
 
 DataJobProcess::~DataJobProcess() {
     callback_ = {};
+    progress_callback_ = {};
     completed_ = true;
     if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
         // QProcess::kill maps to an unconditional process kill on supported
@@ -100,6 +132,9 @@ bool DataJobProcess::start(
     }
 
     completed_ = false;
+    cancel_requested_ = false;
+    stdout_buffer_.clear();
+    stdout_line_buffer_.clear();
     callback_ = std::move(callback);
     process_->setProgram(worker_program_path());
     process_->setArguments({
@@ -112,9 +147,23 @@ bool DataJobProcess::start(
     return true;
 }
 
+void DataJobProcess::set_progress_callback(ProgressCallback callback) {
+    progress_callback_ = std::move(callback);
+}
+
+void DataJobProcess::request_cancel() noexcept {
+    if (completed_ || process_ == nullptr || process_->state() == QProcess::NotRunning) {
+        return;
+    }
+    cancel_requested_ = true;
+    process_->kill();
+}
+
 void DataJobProcess::cancel() noexcept {
     callback_ = {};
+    progress_callback_ = {};
     completed_ = true;
+    cancel_requested_ = true;
     if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
         process_->kill();
     }
@@ -124,11 +173,50 @@ bool DataJobProcess::running() const noexcept {
     return process_ != nullptr && process_->state() != QProcess::NotRunning;
 }
 
+void DataJobProcess::consume_stdout(const bool final_drain) {
+    if (process_ == nullptr) return;
+    const QByteArray chunk = process_->readAllStandardOutput();
+    if (!chunk.isEmpty()) {
+        stdout_buffer_.append(chunk);
+        stdout_line_buffer_.append(chunk);
+    }
+
+    while (true) {
+        const int newline = stdout_line_buffer_.indexOf('\n');
+        if (newline < 0) break;
+        const QByteArray line = stdout_line_buffer_.left(newline).trimmed();
+        stdout_line_buffer_.remove(0, newline + 1);
+        if (!line.startsWith("AERIS_DATA_JOB_PROGRESS")) continue;
+
+        std::uint64_t current = 0U;
+        std::uint64_t total = 0U;
+        parse_unsigned_field(line, QByteArrayLiteral("current="), current);
+        parse_unsigned_field(line, QByteArrayLiteral("total="), total);
+        const int phase_position = line.indexOf(QByteArrayLiteral(" phase="));
+        std::string phase;
+        if (phase_position >= 0) {
+            phase = line.mid(phase_position + 7).trimmed().toStdString();
+        }
+        if (progress_callback_) {
+            progress_callback_(DataJobProgress{current, total, std::move(phase)});
+        }
+    }
+
+    if (final_drain && !stdout_line_buffer_.trimmed().isEmpty()) {
+        // Preserve a final non-newline protocol fragment for completion parsing.
+        // Progress lines are always flushed with a newline by the worker.
+        stdout_line_buffer_.clear();
+    }
+}
+
 void DataJobProcess::finish_once(DataJobResult result) {
     if (completed_) return;
     completed_ = true;
+    ProgressCallback progress = std::move(progress_callback_);
+    Q_UNUSED(progress);
     CompletionCallback callback = std::move(callback_);
     callback_ = {};
+    progress_callback_ = {};
     if (callback) callback(std::move(result));
 }
 
