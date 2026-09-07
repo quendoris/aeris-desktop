@@ -3,7 +3,6 @@
 #pragma once
 
 #include "aeris/storage/project.hpp"
-#include "data_job_progress.hpp"
 
 #include <filesystem>
 #include <string>
@@ -27,8 +26,7 @@ struct WorldDataImportResult final {
 [[nodiscard]] WorldDataImportResult import_natural_earth_110m_world(
     storage::ProjectStore& project,
     const std::filesystem::path& source_root,
-    std::string_view modified_utc,
-    const DataJobProgressCallback& progress = {}
+    std::string_view modified_utc
 );
 
 }  // namespace aeris::desktop
