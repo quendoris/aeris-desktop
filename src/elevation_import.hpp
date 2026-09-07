@@ -3,6 +3,7 @@
 #pragma once
 
 #include "aeris/storage/project.hpp"
+#include "data_job_progress.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -28,7 +29,9 @@ struct ElevationImportResult final {
 [[nodiscard]] ElevationImportResult import_etopo2022_global_60s(
     storage::ProjectStore& project,
     const std::filesystem::path& geotiff_path,
-    std::string_view modified_utc);
+    std::string_view modified_utc,
+    const DataJobProgressCallback& progress = {}
+);
 
 namespace testing {
 
@@ -40,7 +43,9 @@ namespace testing {
 [[nodiscard]] ElevationImportResult import_deterministic_global_elevation_fixture(
     storage::ProjectStore& project,
     const std::filesystem::path& geotiff_path,
-    std::string_view modified_utc);
+    std::string_view modified_utc,
+    const DataJobProgressCallback& progress = {}
+);
 
 }  // namespace testing
 
