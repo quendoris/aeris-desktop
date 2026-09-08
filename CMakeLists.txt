@@ -121,5 +121,175 @@ target_link_libraries(aeris-data-worker PRIVATE
 )
 target_compile_features(aeris-data-worker PRIVATE cxx_std_17)
 set_target_properties(aeris-data-worker PROPERTIES CXX_EXTENSIONS OFF)
-
 add_dependencies(aeris-desktop aeris-data-worker)
+
+add_executable(aeris-demo-project dev/make_demo_project.cpp)
+target_link_libraries(aeris-demo-project PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+)
+target_compile_features(aeris-demo-project PRIVATE cxx_std_17)
+set_target_properties(aeris-demo-project PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-project-lifecycle-probe
+    dev/project_lifecycle_probe.cpp
+    src/flag_pack_import.cpp
+    src/flag_pack_import.hpp
+    src/project_model.cpp
+    src/project_model.hpp
+    src/world_data_import.cpp
+    src/world_data_import.hpp
+)
+target_include_directories(aeris-desktop-project-lifecycle-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-project-lifecycle-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Gui
+)
+target_compile_features(aeris-desktop-project-lifecycle-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-project-lifecycle-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-elevation-tiff-probe
+    dev/elevation_tiff_probe.cpp
+    src/elevation_tiff.cpp
+    src/elevation_tiff.hpp
+    src/elevation_tiff_inspect.cpp
+)
+target_include_directories(aeris-desktop-elevation-tiff-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-elevation-tiff-probe PRIVATE TIFF::TIFF)
+target_compile_features(aeris-desktop-elevation-tiff-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-elevation-tiff-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-elevation-import-probe
+    dev/elevation_import_probe.cpp
+    src/elevation_import.cpp
+    src/elevation_import.hpp
+    src/elevation_tiff.cpp
+    src/elevation_tiff.hpp
+    src/elevation_tiff_inspect.cpp
+)
+target_include_directories(aeris-desktop-elevation-import-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-elevation-import-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    TIFF::TIFF
+)
+target_compile_features(aeris-desktop-elevation-import-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-elevation-import-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-elevation-render-probe
+    dev/elevation_render_probe.cpp
+    src/elevation_detail_loader.cpp
+    src/elevation_detail_loader.hpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
+    src/map_view.cpp
+    src/map_view.hpp
+    src/map_view_projection.cpp
+    src/project_model.cpp
+    src/project_model.hpp
+)
+target_include_directories(aeris-desktop-elevation-render-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-elevation-render-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+target_compile_features(aeris-desktop-elevation-render-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-elevation-render-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-render-probe
+    dev/render_project.cpp
+    src/elevation_detail_loader.cpp
+    src/elevation_detail_loader.hpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
+    src/flag_renderer.cpp
+    src/flag_renderer.hpp
+    src/map_view.cpp
+    src/map_view.hpp
+    src/map_view_projection.cpp
+    src/map_workspace_view.cpp
+    src/map_workspace_view.hpp
+    src/project_model.cpp
+    src/project_model.hpp
+)
+target_include_directories(aeris-desktop-render-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-render-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+target_compile_features(aeris-desktop-render-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-render-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+add_executable(aeris-desktop-projection-catalog-probe
+    dev/projection_catalog_probe.cpp
+    src/elevation_detail_loader.cpp
+    src/elevation_detail_loader.hpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
+    src/flag_renderer.cpp
+    src/flag_renderer.hpp
+    src/map_view.cpp
+    src/map_view.hpp
+    src/map_view_projection.cpp
+    src/map_workspace_view.cpp
+    src/map_workspace_view.hpp
+    src/project_model.cpp
+    src/project_model.hpp
+)
+target_include_directories(aeris-desktop-projection-catalog-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-projection-catalog-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+target_compile_features(aeris-desktop-projection-catalog-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTENSIONS OFF)
+
+if(MSVC)
+    target_compile_options(aeris-desktop PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-data-worker PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-elevation-import-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-elevation-render-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-data-worker PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-elevation-import-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-elevation-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+endif()
