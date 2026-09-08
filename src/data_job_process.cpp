@@ -34,10 +34,10 @@ namespace {
     const QByteArray& key,
     std::uint64_t& value
 ) {
-    const int position = line.indexOf(key);
+    const qsizetype position = line.indexOf(key);
     if (position < 0) return false;
-    const int first = position + key.size();
-    int last = line.indexOf(' ', first);
+    const qsizetype first = position + key.size();
+    qsizetype last = line.indexOf(' ', first);
     if (last < 0) last = line.size();
     bool ok = false;
     const qulonglong parsed = line.mid(first, last - first).toULongLong(&ok);
@@ -182,7 +182,7 @@ void DataJobProcess::consume_stdout(const bool final_drain) {
     }
 
     while (true) {
-        const int newline = stdout_line_buffer_.indexOf('\n');
+        const qsizetype newline = stdout_line_buffer_.indexOf('\n');
         if (newline < 0) break;
         const QByteArray line = stdout_line_buffer_.left(newline).trimmed();
         stdout_line_buffer_.remove(0, newline + 1);
@@ -190,9 +190,13 @@ void DataJobProcess::consume_stdout(const bool final_drain) {
 
         std::uint64_t current = 0U;
         std::uint64_t total = 0U;
-        parse_unsigned_field(line, QByteArrayLiteral("current="), current);
-        parse_unsigned_field(line, QByteArrayLiteral("total="), total);
-        const int phase_position = line.indexOf(QByteArrayLiteral(" phase="));
+        const bool has_current =
+            parse_unsigned_field(line, QByteArrayLiteral("current="), current);
+        const bool has_total =
+            parse_unsigned_field(line, QByteArrayLiteral("total="), total);
+        if (!has_current || !has_total) continue;
+
+        const qsizetype phase_position = line.indexOf(QByteArrayLiteral(" phase="));
         std::string phase;
         if (phase_position >= 0) {
             phase = line.mid(phase_position + 7).trimmed().toStdString();
@@ -212,8 +216,6 @@ void DataJobProcess::consume_stdout(const bool final_drain) {
 void DataJobProcess::finish_once(DataJobResult result) {
     if (completed_) return;
     completed_ = true;
-    ProgressCallback progress = std::move(progress_callback_);
-    Q_UNUSED(progress);
     CompletionCallback callback = std::move(callback_);
     callback_ = {};
     progress_callback_ = {};
