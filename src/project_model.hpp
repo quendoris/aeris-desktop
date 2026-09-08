@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: 2026 quendoris
+// SPDX-License-Identifier: AGPL-3.0-only
+#pragma once
+
+#include "aeris/elevation/grid.hpp"
+#include "aeris/source/adapter.hpp"
+#include "aeris/storage/layer.hpp"
+#include "aeris/storage/project.hpp"
+
+#include <QImage>
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace aeris::desktop {
+
+struct EmbeddedProjectResource final {
+    std::string media_type;
+    std::vector<std::uint8_t> bytes;
+    QImage raster_image;
+    std::optional<elevation::ElevationTile> elevation_tile;
+    // Rebuildable frontend presentation derived from numerical elevation. It is
+    // never serialized back into .aeris and may change with cartographic style.
+    QImage elevation_preview_image;
+};
+
+struct ProjectModel final {
+    // Machine-local location of the already-open durable project. It is not
+    // serialized into .aeris. The renderer uses this only to open a separate
+    // read handle for viewport-bounded lazy resources such as elevation detail
+    // tiles; canonical sources and eagerly required resources remain reconstructed
+    // above this boundary as before.
+    std::filesystem::path project_path;
+    std::vector<storage::ProjectLayerRecord> layers;
+    std::unordered_map<std::string, std::shared_ptr<const source::Result>> sources;
+    std::unordered_map<std::string, std::shared_ptr<const EmbeddedProjectResource>> resources;
+};
+
+struct ProjectModelLoadResult final {
+    std::shared_ptr<const ProjectModel> model;
+    std::string diagnostic;
+
+    [[nodiscard]] bool ok() const noexcept { return model != nullptr; }
+};
+
+[[nodiscard]] ProjectModelLoadResult load_project_model(
+    const storage::ProjectStore& project);
+
+}  // namespace aeris::desktop
