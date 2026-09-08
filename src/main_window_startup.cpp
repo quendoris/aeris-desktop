@@ -7,6 +7,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QDockWidget>
 #include <QFile>
 #include <QMessageBox>
 #include <QStandardPaths>
