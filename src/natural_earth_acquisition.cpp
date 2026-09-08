@@ -77,6 +77,20 @@ struct LocalResource final {
     return true;
 }
 
+[[nodiscard]] bool content_range_starts_at(
+    const QByteArray& header,
+    const qint64 expected_start
+) {
+    constexpr auto prefix = "bytes ";
+    if (!header.startsWith(prefix)) return false;
+    const qsizetype first = static_cast<qsizetype>(sizeof(prefix) - 1U);
+    const qsizetype dash = header.indexOf('-', first);
+    if (dash <= first) return false;
+    bool ok = false;
+    const qlonglong start = header.mid(first, dash - first).toLongLong(&ok);
+    return ok && start == expected_start;
+}
+
 [[nodiscard]] bool publish_verified_part(
     const std::filesystem::path& part,
     const std::filesystem::path& target,
@@ -164,35 +178,60 @@ struct LocalResource final {
 
     qint64 base_offset = static_cast<qint64>(partial_size);
     bool response_mode_ready = false;
+    bool response_writable = false;
+    bool response_failed = false;
     bool write_failed = false;
+    std::string response_failure;
 
     const auto prepare_response_mode = [&]() {
-        if (response_mode_ready) return;
+        if (response_mode_ready || response_failed) return;
         const QVariant raw_status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         if (!raw_status.isValid()) return;
         const int status = raw_status.toInt();
-        if (base_offset > 0 && status != 206) {
-            // The immutable URL is safe to restart, but appending a full 200
-            // response to an old partial file would corrupt it.
+
+        if (base_offset > 0 && status == 206) {
+            const QByteArray content_range = reply->rawHeader(QByteArrayLiteral("Content-Range"));
+            if (!content_range_starts_at(content_range, base_offset)) {
+                response_failed = true;
+                response_failure =
+                    "Natural Earth resume response has an unexpected Content-Range for " +
+                    resource.filename + " · existing partial bytes were left untouched";
+                return;
+            }
+            response_writable = true;
+            response_mode_ready = true;
+            return;
+        }
+
+        if (base_offset > 0 && status == 200) {
+            // The server ignored Range. Restart this immutable object safely
+            // rather than append a complete response to the old prefix.
             if (!output.resize(0) || !output.seek(0)) {
                 write_failed = true;
                 return;
             }
             base_offset = 0;
+            response_writable = true;
+            response_mode_ready = true;
+            return;
         }
+
+        if (base_offset == 0 && status == 200) {
+            response_writable = true;
+        }
+        // Error responses and an unsolicited 206 are drained but never written
+        // into the resumable payload. Their status is handled after finished().
         response_mode_ready = true;
     };
 
     const auto drain = [&]() {
         prepare_response_mode();
-        if (write_failed) {
-            reply->readAll();
-            return;
-        }
+        // readyRead can precede the point at which Qt exposes the HTTP status.
+        // Do not consume or write a single byte until response mode is known.
+        if (!response_mode_ready && !response_failed && !write_failed) return;
         const QByteArray chunk = reply->readAll();
-        if (!chunk.isEmpty() && output.write(chunk) != chunk.size()) {
-            write_failed = true;
-        }
+        if (response_failed || write_failed || !response_writable || chunk.isEmpty()) return;
+        if (output.write(chunk) != chunk.size()) write_failed = true;
     };
 
     QObject::connect(reply, &QNetworkReply::readyRead, reply, drain);
@@ -226,6 +265,10 @@ struct LocalResource final {
 
     if (write_failed) {
         diagnostic = "could not write Natural Earth partial download: " + resource.filename;
+        return false;
+    }
+    if (response_failed) {
+        diagnostic = std::move(response_failure);
         return false;
     }
 
