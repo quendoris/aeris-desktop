@@ -23,6 +23,7 @@
 #include <limits>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace aeris::desktop {
 namespace {
@@ -140,7 +141,9 @@ void save_if_range_validator(
         file.cancelWriting();
         return;
     }
-    file.commit();
+    if (!file.commit()) {
+        QFile::remove(path_to_qt(validator_path));
+    }
 }
 
 [[nodiscard]] bool publish_part(
@@ -191,7 +194,8 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     const Etopo2022SourceDescriptor source = etopo2022_source_descriptor(variant);
     const std::filesystem::path target = cache_root / std::string(source.filename);
 
-    if (std::filesystem::exists(target)) {
+    std::error_code target_error;
+    if (std::filesystem::exists(target, target_error) && !target_error) {
         std::string validation;
         if (valid_etopo_file(target, validation)) {
             report_data_job_progress(
