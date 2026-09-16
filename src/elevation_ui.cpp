@@ -27,11 +27,11 @@ void install_elevation_import_action(MainWindow& window) {
     }
 
     auto* action = data_menu->addAction(
-        QStringLiteral("Import NOAA ETOPO 2022 elevation…")
+        QStringLiteral("Add NOAA ETOPO 2022 elevation…")
     );
     action->setObjectName(QStringLiteral("importEtopo2022ElevationAction"));
     action->setToolTip(QStringLiteral(
-        "Import the separately downloaded global ETOPO 2022 v1 60 arc-second surface or bed GeoTIFF into numerical .aeris elevation tiles"
+        "Download an official NOAA/NCEI ETOPO 2022 global 60 arc-second Ice Surface or Bedrock dataset, or import an already acquired GeoTIFF for offline use"
     ));
     QObject::connect(
         action,
