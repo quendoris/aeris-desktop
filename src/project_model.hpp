@@ -22,7 +22,17 @@ namespace aeris::desktop {
 struct EmbeddedProjectResource final {
     std::string media_type;
     std::vector<std::uint8_t> bytes;
-    QImage raster_image;
+
+    // PNG resources such as country flags stay in their compact embedded form
+    // when a project opens. Width/height come from the PNG IHDR and are enough
+    // for layout. Full pixel decode is deferred until the renderer actually
+    // chooses that symbol for this viewport. These presentation fields are
+    // mutated only by the GUI renderer; durable bytes remain immutable.
+    std::uint32_t raster_width{0U};
+    std::uint32_t raster_height{0U};
+    mutable bool raster_decode_attempted{false};
+    mutable QImage raster_image;
+
     std::optional<elevation::ElevationTile> elevation_tile;
     // Rebuildable frontend presentation derived from numerical elevation. It is
     // never serialized back into .aeris and may change with cartographic style.
