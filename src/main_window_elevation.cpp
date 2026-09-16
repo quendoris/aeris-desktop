@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QStatusBar>
 
