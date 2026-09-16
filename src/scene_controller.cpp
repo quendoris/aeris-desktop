@@ -54,8 +54,9 @@ public:
         }
 
         QPointer<SceneController> target = target_;
+        if (!target || token->load(std::memory_order_relaxed)) return;
         QMetaObject::invokeMethod(
-            target_,
+            target,
             [target, generation = generation_, frame = std::move(frame)]() mutable {
                 if (target) target->accept_frame(generation, std::move(frame));
             },
