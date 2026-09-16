@@ -54,7 +54,7 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-elevation-tiff-probe aeris-desktop-elevation-import-probe aeris-desktop-elevation-render-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-data-worker-recovery-probe aeris-desktop-elevation-tiff-probe aeris-desktop-elevation-import-probe aeris-desktop-elevation-render-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
           --parallel 2
 
       - name: Prove compressed Float32 TIFF acquisition
@@ -76,6 +76,14 @@ jobs:
           test "$(git -C "$root" rev-parse HEAD)" = "91286fe015b4957b51bc470eca4b5fd6f5ac90da"
           test -s "$root/png/256/US.png"
           test -s "$root/png/256/RU.png"
+
+      - name: Prove killed data worker recovery and idempotent retry
+        run: >-
+          ./build/aeris-desktop-data-worker-recovery-probe
+          ./build/aeris-data-worker
+          ${{ runner.temp }}/natural-earth-v5.1.2
+          ${{ runner.temp }}/country-flags
+          ${{ runner.temp }}/worker-recovery.aeris
 
       - name: Prove empty project and data-driven durable expansion
         run: >-
