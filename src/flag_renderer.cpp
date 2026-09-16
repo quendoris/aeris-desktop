@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -112,8 +113,38 @@ namespace {
     return std::clamp<std::size_t>(budget, globe ? 12U : 16U, 80U);
 }
 
+[[nodiscard]] const QImage* decoded_flag_image(
+    const EmbeddedProjectResource& resource
+) {
+    if (resource.media_type != "image/png" ||
+        resource.raster_width == 0U || resource.raster_height == 0U) {
+        return nullptr;
+    }
+    if (!resource.raster_image.isNull()) return &resource.raster_image;
+    if (resource.raster_decode_attempted) return nullptr;
+
+    resource.raster_decode_attempted = true;
+    if (resource.bytes.empty() ||
+        resource.bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return nullptr;
+    }
+
+    QImage decoded;
+    if (!decoded.loadFromData(
+            reinterpret_cast<const uchar*>(resource.bytes.data()),
+            static_cast<int>(resource.bytes.size()),
+            "PNG"
+        ) ||
+        decoded.width() != static_cast<int>(resource.raster_width) ||
+        decoded.height() != static_cast<int>(resource.raster_height)) {
+        return nullptr;
+    }
+    resource.raster_image = std::move(decoded);
+    return &resource.raster_image;
+}
+
 struct FlagCandidate final {
-    const QImage* image{nullptr};
+    const EmbeddedProjectResource* resource{nullptr};
     QRectF rect;
     double score{0.0};
 };
@@ -140,7 +171,8 @@ void draw_country_flags(
         const auto resource = model.resources.find(binding.resource_id);
         if (resource == model.resources.end() || !resource->second ||
             resource->second->media_type != "image/png" ||
-            resource->second->raster_image.isNull()) {
+            resource->second->raster_width == 0U ||
+            resource->second->raster_height == 0U) {
             continue;
         }
         flag_resources.emplace(
@@ -202,10 +234,9 @@ void draw_country_flags(
         // icon sheet. Zoom naturally increases projected_area quadratically.
         if (projected_area < 2600.0) continue;
 
-        const QImage& image = flag->second->raster_image;
-        if (image.width() <= 0 || image.height() <= 0) continue;
-        const double aspect = static_cast<double>(image.width()) /
-            static_cast<double>(image.height());
+        const EmbeddedProjectResource& resource = *flag->second;
+        const double aspect = static_cast<double>(resource.raster_width) /
+            static_cast<double>(resource.raster_height);
         double width = 24.0;
         double height = width / aspect;
         if (height > 16.0) {
@@ -229,7 +260,7 @@ void draw_country_flags(
         );
         if (!painter.viewport().intersects(rect.toAlignedRect())) continue;
         if (globe && !rect_inside_circle(rect, globe_center, globe_radius_px - 2.0)) continue;
-        candidates.push_back({&image, rect, projected_area});
+        candidates.push_back({&resource, rect, projected_area});
     }
 
     std::sort(
@@ -259,12 +290,18 @@ void draw_country_flags(
                 break;
             }
         }
-        if (collides) continue;
+        if (collides || candidate.resource == nullptr) continue;
+
+        // Decode only after viewport selection and collision rejection. A
+        // whole-world frame therefore touches at most the small symbol budget,
+        // not every embedded country flag in the project.
+        const QImage* image = decoded_flag_image(*candidate.resource);
+        if (image == nullptr) continue;
 
         painter.setPen(QPen(QColor(235, 237, 239, 190), 1.0));
         painter.setBrush(QColor(18, 21, 24, 180));
         painter.drawRoundedRect(candidate.rect.adjusted(-1.5, -1.5, 1.5, 1.5), 1.5, 1.5);
-        painter.drawImage(candidate.rect, *candidate.image);
+        painter.drawImage(candidate.rect, *image);
         occupied.push_back(collision);
         if (occupied.size() >= max_symbols) break;
     }
