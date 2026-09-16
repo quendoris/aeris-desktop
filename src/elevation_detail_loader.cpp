@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -27,12 +28,14 @@ public:
         std::filesystem::path project_path,
         std::vector<std::string> resource_ids,
         std::shared_ptr<std::atomic_bool> canceled,
+        std::shared_ptr<std::mutex> delivery_mutex,
         const std::uint64_t generation
     )
         : target_(std::move(target)),
           project_path_(std::move(project_path)),
           resource_ids_(std::move(resource_ids)),
           canceled_(std::move(canceled)),
+          delivery_mutex_(std::move(delivery_mutex)),
           generation_(generation) {
         setAutoDelete(true);
     }
@@ -162,11 +165,16 @@ public:
 
 private:
     void deliver(std::vector<ElevationDetailLoadResult> results) {
-        if (canceled_->load(std::memory_order_relaxed) || !target_) return;
+        // See SceneTask for the lifetime proof. Cancellation/destruction uses
+        // the same shared gate, so invokeMethod is either queued against a live
+        // QObject or skipped entirely after the token becomes canceled.
+        std::lock_guard<std::mutex> delivery_guard(*delivery_mutex_);
+        if (canceled_->load(std::memory_order_relaxed)) return;
         QPointer<ElevationDetailLoader> target = target_;
+        if (!target) return;
         const std::filesystem::path project_path = project_path_;
         QMetaObject::invokeMethod(
-            target_,
+            target.data(),
             [
                 target,
                 generation = generation_,
@@ -189,6 +197,7 @@ private:
     std::filesystem::path project_path_;
     std::vector<std::string> resource_ids_;
     std::shared_ptr<std::atomic_bool> canceled_;
+    std::shared_ptr<std::mutex> delivery_mutex_;
     std::uint64_t generation_{0U};
 };
 
@@ -196,7 +205,8 @@ private:
 
 ElevationDetailLoader::ElevationDetailLoader(QObject* parent)
     : QObject(parent),
-      pool_(new QThreadPool) {
+      pool_(new QThreadPool),
+      delivery_mutex_(std::make_shared<std::mutex>()) {
     pool_->setMaxThreadCount(1);
     pool_->setExpiryTimeout(1000);
 }
@@ -207,9 +217,8 @@ ElevationDetailLoader::~ElevationDetailLoader() {
 
     // Detail I/O/decode is read-only and cancellation-aware. Do not block the
     // top-level close path waiting for an in-flight SQLite stream/decode to
-    // return. An active pool is intentionally detached; its task owns the
-    // project path/resource ids and its QPointer target becomes null on QObject
-    // destruction, so it cannot publish into dead UI state.
+    // return. Cancellation has already closed the short delivery gate, so an
+    // active pool may safely outlive this QObject until process termination.
     pool_->clear();
     if (pool_->waitForDone(0)) delete pool_;
     pool_ = nullptr;
@@ -244,20 +253,14 @@ void ElevationDetailLoader::request(
         return;
     }
 
-    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    pool_->clear();
-    ++generation_;
-    task_running_ = false;
+    invalidate_active_task();
     active_project_path_ = std::move(project_path);
     active_resource_ids_ = std::move(resource_ids);
     start_request(active_project_path_, active_resource_ids_);
 }
 
 void ElevationDetailLoader::cancel() {
-    if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    if (pool_ != nullptr) pool_->clear();
-    ++generation_;
-    task_running_ = false;
+    invalidate_active_task();
     active_project_path_.clear();
     active_resource_ids_.clear();
 }
@@ -289,8 +292,19 @@ void ElevationDetailLoader::start_request(
         project_path,
         resource_ids,
         cancel_token_,
+        delivery_mutex_,
         generation
     ));
+}
+
+void ElevationDetailLoader::invalidate_active_task() {
+    if (cancel_token_) {
+        std::lock_guard<std::mutex> delivery_guard(*delivery_mutex_);
+        cancel_token_->store(true, std::memory_order_relaxed);
+    }
+    if (pool_ != nullptr) pool_->clear();
+    ++generation_;
+    task_running_ = false;
 }
 
 }  // namespace aeris::desktop
