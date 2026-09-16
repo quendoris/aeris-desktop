@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "elevation_import.hpp"
+#include "etopo_acquisition.hpp"
 #include "flag_pack_import.hpp"
 #include "natural_earth_acquisition.hpp"
 #include "world_data_import.hpp"
@@ -25,7 +26,8 @@ constexpr int kImportFailure = 4;
 
 void print_usage() {
     std::cerr
-        << "usage: aeris-data-worker <world|world-auto|flags|etopo> "
+        << "usage: aeris-data-worker "
+        << "<world|world-auto|flags|etopo|etopo-auto-surface|etopo-auto-bed> "
         << "<project.aeris> <source-or-cache-path> <modified-utc>\n";
 }
 
@@ -127,6 +129,35 @@ int main(int argc, char** argv) {
             result.ok(),
             result.changed,
             result.diagnostic
+        );
+    }
+
+    if (operation == "etopo-auto-surface" || operation == "etopo-auto-bed") {
+        const aeris::desktop::Etopo2022Variant variant =
+            operation == "etopo-auto-bed"
+                ? aeris::desktop::Etopo2022Variant::bedrock
+                : aeris::desktop::Etopo2022Variant::ice_surface;
+        const aeris::desktop::Etopo2022AcquisitionResult acquired =
+            aeris::desktop::acquire_etopo2022_global_60s(
+                variant,
+                source_path,
+                report_progress
+            );
+        if (!acquired.ok()) {
+            return report_result(false, false, acquired.diagnostic);
+        }
+        report_progress({0U, 0U, "Decoding, tiling and embedding acquired ETOPO elevation"});
+        const aeris::desktop::ElevationImportResult result =
+            aeris::desktop::import_etopo2022_global_60s(
+                *opened.store,
+                acquired.geotiff_path,
+                modified_utc
+            );
+        return report_result(
+            result.ok(),
+            result.changed,
+            result.diagnostic,
+            result.detail_tiles
         );
     }
 
