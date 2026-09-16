@@ -133,6 +133,7 @@ bool DataJobProcess::start(
 
     completed_ = false;
     cancel_requested_ = false;
+    project_path_ = project_path;
     stdout_buffer_.clear();
     stdout_line_buffer_.clear();
     callback_ = std::move(callback);
