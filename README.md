@@ -76,31 +76,39 @@ Use `File -> Open project…` and select `demo.aeris`.
 
 The map is rendered from the durable project source/layer model. Layer visibility changes in the Layers dock are acknowledged `.aeris` transactions rather than unsaved Qt state.
 
-## Import real NOAA ETOPO 2022 terrain
+## Add NOAA ETOPO 2022 terrain
 
-AERIS currently accepts either official NOAA/NCEI ETOPO 2022 v1 global 60 arc-second GeoTIFF filename:
+AERIS supports both official NOAA/NCEI ETOPO 2022 v1 global 60 arc-second GeoTIFF variants:
 
 ```text
 ETOPO_2022_v1_60s_N90W180_surface.tif
 ETOPO_2022_v1_60s_N90W180_bed.tif
 ```
 
-The production importer deliberately validates both the official filename and the exact `21600x10800` global grid. Download one of those files separately from NOAA/NCEI; AERIS does not silently fetch acquisition data on project open.
-
-With a mutable world project open in Desktop, use:
+With a mutable world project open, use:
 
 ```text
-Data -> Import NOAA ETOPO 2022 elevation…
+Data -> Add NOAA ETOPO 2022 elevation…
 ```
 
-Select the downloaded GeoTIFF. Import runs in the background and converts the source into durable numerical `.aeris` state:
+The normal product path no longer requires the user to find or prepare the GeoTIFF manually. The dialog offers:
+
+- **Ice Surface** — land and ocean relief with the top of the Greenland and Antarctic ice sheets;
+- **Bedrock** — land and ocean relief with bedrock below the major ice sheets;
+- **Import local GeoTIFF…** — advanced/offline fallback for an already acquired official file.
+
+For the download path, AERIS launches the isolated data worker and writes into its machine-local acquisition cache. Download progress remains visible in Desktop. Cancel kills the worker without making the UI wait; partial bytes are retained. Cross-process Range resume is used only when the previous response supplied a safe HTTP validator (`ETag` or `Last-Modified`) that can be sent through `If-Range`; otherwise the stale partial is discarded and acquisition safely restarts instead of combining bytes from two representations.
+
+Before publication into the cache, the completed download must pass the same cheap TIFF structural contract expected by the production importer: a supported single-band Float32 TIFF with the exact `21600x10800` global grid. The importer then performs its strict official-filename/grid validation and converts the source into durable numerical `.aeris` state:
 
 - 72 canonical 30-degree detail tiles at 60 arc-seconds;
 - one 15 arc-minute numerical overview;
-- exact source SHA-256 and byte size;
-- NOAA/NCEI provenance metadata.
+- computed source SHA-256 and byte size recorded as provenance;
+- NOAA/NCEI source metadata.
 
-After the import reports success, the original GeoTIFF is acquisition-only and is no longer required. You can close Desktop, move/delete the TIFF, reopen `demo.aeris`, and terrain must still render from the project alone.
+AERIS does not currently claim an externally published NOAA SHA-256 for these GeoTIFFs. The acquisition safety contract is therefore transport-validator + structural validation, while the imported `.aeris` records the exact SHA-256 of the bytes it actually consumed. No expected checksum is invented.
+
+After the import reports success, the acquisition GeoTIFF is no longer a rendering dependency. You can close Desktop, move/delete the cached or local TIFF, reopen the project, and terrain must still render from `.aeris` alone.
 
 At whole-world scale the renderer uses the overview. At roughly `3x` zoom and above it requests only viewport-relevant detail resources. Detail `ProjectStore` open/verification/decode is performed on a dedicated worker; the first high-zoom paint remains I/O-free and falls back to the overview until detail arrives. The in-memory detail cache is currently bounded to 16 tiles.
 
@@ -123,7 +131,7 @@ Useful things to inspect while exercising the real ETOPO build:
 - zoom/pan across 30-degree tile boundaries and inspect hillshade continuity;
 - open `Tools -> Unfold / projection`, drag the seam, calculate each planar projection, and compare terrain/political alignment;
 - return to Globe and confirm its independent viewport is restored;
-- close/reopen the `.aeris` after moving/deleting the source ETOPO TIFF and confirm terrain is unchanged.
+- close/reopen the `.aeris` after moving/deleting the acquisition ETOPO TIFF and confirm terrain is unchanged.
 
 The final animated Globe-to-sheet unfold transition, richer multilevel terrain LOD, cities/routes and the GPU rendering path remain later slices.
 
