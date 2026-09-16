@@ -7,6 +7,7 @@
 #include "flag_resource_loader.hpp"
 #include "map_view.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <vector>
 
@@ -60,6 +61,7 @@ private:
     FlagResourceLoader flag_resource_loader_;
     FlagRenderCache flag_render_cache_;
     std::filesystem::path flag_project_path_;
+    std::uint64_t flag_project_revision_{0U};
 };
 
 }  // namespace aeris::desktop
