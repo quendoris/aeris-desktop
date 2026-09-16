@@ -119,6 +119,31 @@ jobs:
           ${{ runner.temp }}/desktop-demo.png
           ${{ runner.temp }}/desktop-seam.png
 
+      - name: Prove close during durable scene work exits promptly
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          timeout --signal=KILL 3s \
+            ./build/aeris-desktop \
+            --quit-after-ms 40 \
+            ${{ runner.temp }}/desktop-demo.aeris
+
+      - name: Prove close during starter acquisition exits promptly
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          XDG_DATA_HOME: ${{ runner.temp }}/shutdown-probe-data
+          XDG_CACHE_HOME: ${{ runner.temp }}/shutdown-probe-cache
+        run: |
+          set -euo pipefail
+          rm -rf "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          mkdir -p "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          timeout --signal=KILL 3s \
+            ./build/aeris-desktop \
+            --quit-after-ms 150
+
       - name: Prove durable project and renders exist
         shell: bash
         run: |

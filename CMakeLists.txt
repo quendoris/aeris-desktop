@@ -56,6 +56,7 @@ add_executable(aeris-desktop
     src/main_window.cpp
     src/main_window_elevation.cpp
     src/main_window_flags.cpp
+    src/main_window_project_path.cpp
     src/main_window_shutdown.cpp
     src/main_window_startup.cpp
     src/main_window.hpp

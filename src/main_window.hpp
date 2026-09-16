@@ -9,6 +9,7 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <filesystem>
 #include <memory>
 
 class QAction;
@@ -40,6 +41,12 @@ public:
     // may ship an already-populated starter without changing this ownership
     // boundary.
     void open_startup_world();
+
+    // Open an explicit durable project without a file dialog. This is the same
+    // ownership boundary used by normal Desktop loading, and also makes command-
+    // line launches and end-to-end shutdown acceptance possible without test
+    // code reaching into MainWindow internals.
+    [[nodiscard]] bool open_project_path(const std::filesystem::path& path);
 
     // Public UI commands so optional data-pack integrations can add themselves
     // to the Data menu without taking ownership of project/storage internals.
