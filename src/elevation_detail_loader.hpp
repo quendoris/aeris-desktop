@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,13 +60,16 @@ private:
     void start_request(
         const std::filesystem::path& project_path,
         const std::vector<std::string>& resource_ids);
+    void invalidate_active_task();
 
     // See SceneController: active read/decode work must never turn QObject
     // destruction into an unbounded join. The dedicated pool can be detached on
-    // shutdown because tasks own their inputs and deliver only via QPointer.
+    // shutdown because tasks own their inputs and the delivery gate closes the
+    // final QObject handoff before destruction continues.
     QThreadPool* pool_{nullptr};
     ResultCallback result_callback_;
     std::shared_ptr<std::atomic_bool> cancel_token_;
+    std::shared_ptr<std::mutex> delivery_mutex_;
     std::filesystem::path active_project_path_;
     std::vector<std::string> active_resource_ids_;
     std::uint64_t generation_{0U};
