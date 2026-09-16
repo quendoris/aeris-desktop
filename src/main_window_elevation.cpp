@@ -17,6 +17,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 
 namespace aeris::desktop {
 namespace {
