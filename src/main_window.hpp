@@ -11,6 +11,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 class QAction;
 class QCloseEvent;
@@ -48,6 +50,12 @@ public:
     // code reaching into MainWindow internals.
     [[nodiscard]] bool open_project_path(const std::filesystem::path& path);
 
+    // Replace the original direct layer-mutation connection with a coordinator
+    // that keeps checkboxes responsive while an isolated writer owns the same
+    // .aeris. The latest requested visibility is presented immediately and
+    // durably flushed as soon as that writer releases the project.
+    void install_layer_visibility_coordinator();
+
     // Public UI commands so optional data-pack integrations can add themselves
     // to the Data menu without taking ownership of project/storage internals.
     void import_country_flags();
@@ -71,6 +79,9 @@ private:
     bool load_render_model();
     void rebuild_layer_tree();
     void set_layer_visibility(QTreeWidgetItem* item);
+    void set_layer_visibility_coordinated(QTreeWidgetItem* item);
+    void schedule_deferred_layer_visibility_flush();
+    void flush_deferred_layer_visibility();
     void apply_selected_projection();
 
     MapView* map_view_{nullptr};
@@ -104,6 +115,9 @@ private:
     std::shared_ptr<const ProjectModel> model_;
     SceneController scene_controller_;
     DataJobProcess* data_job_{nullptr};
+    std::filesystem::path deferred_layer_visibility_project_;
+    std::unordered_map<std::string, bool> deferred_layer_visibility_;
+    bool deferred_layer_visibility_flush_scheduled_{false};
     bool rebuilding_layers_{false};
 };
 
