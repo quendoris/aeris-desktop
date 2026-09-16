@@ -31,6 +31,10 @@ struct Rgb final {
     const storage::ProjectLayerRecord& layer,
     const storage::LayerResourceBinding& binding
 ) noexcept {
+    // Country flags are optional annotations and are selected by viewport only
+    // after the canonical scene exists. Their PNG bytes must therefore not be
+    // streamed merely because a project opened.
+    if (layer.role_id == storage::kLayerRoleCountryFlagV1) return false;
     if (layer.role_id != storage::kLayerRolePhysicalElevationV1) return true;
     constexpr std::string_view overview_prefix = "overview:";
     return binding.slot_id.size() > overview_prefix.size() &&
@@ -225,7 +229,9 @@ struct Rgb final {
             );
             const Rgb base = hypsometric_color(*center);
             const auto channel = [&](const double value) noexcept {
-                return static_cast<int>(std::lround(std::clamp(value * shade, 0.0, 255.0)));
+                return static_cast<int>(
+                    std::lround(std::clamp(value * shade, 0.0, 255.0))
+                );
             };
             pixels[x] = qRgba(
                 channel(base.r),
@@ -304,7 +310,10 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
         for (const std::string& resource_id : resource_ids) {
             const auto found = records.find(resource_id);
             if (found == records.end()) {
-                return {nullptr, "layer references missing project resource '" + resource_id + "'"};
+                return {
+                    nullptr,
+                    "layer references missing project resource '" + resource_id + "'",
+                };
             }
             const storage::ProjectResourceRecord& record = *found->second;
             if (record.storage_mode != storage::ResourceStorageMode::embedded) {
@@ -315,18 +324,27 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
             }
             if (record.identity.size_bytes >
                 static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-                return {nullptr, "embedded resource is too large for this process: " + resource_id};
+                return {
+                    nullptr,
+                    "embedded resource is too large for this process: " + resource_id,
+                };
             }
 
             auto resource = std::make_shared<EmbeddedProjectResource>();
             resource->media_type = record.identity.media_type;
-            resource->bytes.reserve(static_cast<std::size_t>(record.identity.size_bytes));
+            resource->bytes.reserve(
+                static_cast<std::size_t>(record.identity.size_bytes)
+            );
             const storage::Status streamed = storage::stream_embedded_resource(
                 project,
                 resource_id,
                 [&](const void* data, const std::size_t size) {
                     const auto* begin = static_cast<const std::uint8_t*>(data);
-                    resource->bytes.insert(resource->bytes.end(), begin, begin + size);
+                    resource->bytes.insert(
+                        resource->bytes.end(),
+                        begin,
+                        begin + size
+                    );
                     return storage::Status::success();
                 }
             );
@@ -337,23 +355,27 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
                         streamed.diagnostic,
                 };
             }
-            if (resource->bytes.size() != static_cast<std::size_t>(record.identity.size_bytes)) {
-                return {nullptr, "embedded resource size changed during reconstruction: " + resource_id};
+            if (resource->bytes.size() !=
+                static_cast<std::size_t>(record.identity.size_bytes)) {
+                return {
+                    nullptr,
+                    "embedded resource size changed during reconstruction: " + resource_id,
+                };
             }
 
             if (resource->media_type == "image/png") {
-                // Keep PNG resources compressed on project open. Country flags
-                // are optional annotations and the renderer draws only a small
-                // viewport-bounded subset, so decoding every embedded flag here
-                // caused avoidable cold-open latency. Validate enough PNG
-                // structure to obtain exact layout dimensions; full decode is
-                // performed once, lazily, for symbols that are actually drawn.
+                // Non-flag PNG resources that are part of eager presentation
+                // keep the existing compact-byte path. Country flags never
+                // reach this branch; they are loaded by FlagResourceLoader.
                 if (!parse_png_dimensions(
                         resource->bytes,
                         resource->raster_width,
                         resource->raster_height
                     )) {
-                    return {nullptr, "embedded PNG resource has invalid signature/IHDR: " + resource_id};
+                    return {
+                        nullptr,
+                        "embedded PNG resource has invalid signature/IHDR: " + resource_id,
+                    };
                 }
             } else if (resource->media_type == elevation::kElevationTileMediaType) {
                 elevation::ElevationTileDecodeResult decoded =
