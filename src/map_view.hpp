@@ -141,6 +141,13 @@ protected:
     [[nodiscard]] const RenderFrame* current_render_frame() const noexcept {
         return has_current_frame() ? &frame_ : nullptr;
     }
+    // Rebuildable workspace caches must key themselves by durable revision as
+    // well as project path. The same .aeris path can receive acknowledged
+    // resource mutations while remaining open, and presentation state from an
+    // older revision must not survive that boundary.
+    [[nodiscard]] std::uint64_t current_project_revision() const noexcept {
+        return revision_;
+    }
 
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
