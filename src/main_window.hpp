@@ -10,9 +10,9 @@
 #include <QString>
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
 
 class QAction;
 class QCloseEvent;
@@ -115,8 +115,7 @@ private:
     std::shared_ptr<const ProjectModel> model_;
     SceneController scene_controller_;
     DataJobProcess* data_job_{nullptr};
-    std::filesystem::path deferred_layer_visibility_project_;
-    std::unordered_map<std::string, bool> deferred_layer_visibility_;
+    std::map<std::filesystem::path, std::map<std::string, bool>> deferred_layer_visibility_;
     bool deferred_layer_visibility_flush_scheduled_{false};
     bool rebuilding_layers_{false};
 };
