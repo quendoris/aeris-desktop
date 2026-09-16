@@ -91,8 +91,8 @@ set_target_properties(aeris-desktop PROPERTIES
 
 # Long acquisition/import work belongs outside the GUI process. Network access
 # is intentionally confined to this worker; the renderer/core remain network-
-# free. Exact immutable URLs and SHA-256 verification are applied before source
-# adapters see acquired bytes.
+# free. Exact immutable URLs and verified acquisition contracts are applied
+# before source adapters/importers see acquired bytes.
 add_executable(aeris-data-worker
     src/data_job_progress.hpp
     src/data_worker_main.cpp
@@ -101,6 +101,8 @@ add_executable(aeris-data-worker
     src/elevation_tiff.cpp
     src/elevation_tiff.hpp
     src/elevation_tiff_inspect.cpp
+    src/etopo_acquisition.cpp
+    src/etopo_acquisition.hpp
     src/flag_pack_import.cpp
     src/flag_pack_import.hpp
     src/natural_earth_acquisition.cpp
