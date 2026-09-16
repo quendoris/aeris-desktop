@@ -49,6 +49,14 @@ public:
 
     void set_progress_callback(ProgressCallback callback);
 
+    // The worker project identity remains available while the subprocess is
+    // alive. Presentation-only mutations can therefore avoid contending with a
+    // writer that targets the same .aeris while still committing immediately to
+    // a different project opened by the user.
+    [[nodiscard]] const std::filesystem::path& project_path() const noexcept {
+        return project_path_;
+    }
+
     // User-visible cancel: kill immediately, but deliver one cancelled result
     // when QProcess reports termination so callers can refresh durable state.
     void request_cancel() noexcept;
@@ -64,6 +72,7 @@ private:
     QProcess* process_{nullptr};
     CompletionCallback callback_;
     ProgressCallback progress_callback_;
+    std::filesystem::path project_path_;
     QByteArray stdout_buffer_;
     QByteArray stdout_line_buffer_;
     bool completed_{false};
