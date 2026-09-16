@@ -6,6 +6,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRunnable>
+#include <QThreadPool>
 
 #include <utility>
 
@@ -73,13 +74,25 @@ private:
 }  // namespace
 
 SceneController::SceneController(QObject* parent)
-    : QObject(parent) {
-    pool_.setMaxThreadCount(1);
+    : QObject(parent),
+      pool_(new QThreadPool) {
+    pool_->setMaxThreadCount(1);
+    pool_->setExpiryTimeout(1000);
 }
 
 SceneController::~SceneController() {
     cancel();
-    pool_.waitForDone();
+    if (pool_ == nullptr) return;
+
+    // Never make top-level window destruction a join point. If cancellation has
+    // already drained the pool, reclaim it normally. Otherwise the pool stays
+    // alive just long enough for its cancellation-aware runnable to unwind; the
+    // runnable owns all input state and only talks back through QPointer, so the
+    // destroyed controller is never dereferenced. The OS reclaims the detached
+    // pool at process exit instead of making Super+C wait for geometry work.
+    pool_->clear();
+    if (pool_->waitForDone(0)) delete pool_;
+    pool_ = nullptr;
 }
 
 void SceneController::set_model(std::shared_ptr<const ProjectModel> model) {
@@ -96,7 +109,7 @@ void SceneController::set_busy_callback(BusyCallback callback) {
 }
 
 void SceneController::request(const view::SceneRequest& request) {
-    if (!model_) return;
+    if (!model_ || pool_ == nullptr) return;
 
     if (request.quality == view::SceneQuality::preview && task_running_) {
         if (active_quality_ == view::SceneQuality::preview) {
@@ -112,7 +125,7 @@ void SceneController::request(const view::SceneRequest& request) {
         // Preempt the expensive verified generation rather than making the
         // first visible drag frame wait behind it.
         if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-        pool_.clear();
+        pool_->clear();
         ++generation_;
         task_running_ = false;
     } else if (request.quality == view::SceneQuality::verified) {
@@ -122,7 +135,7 @@ void SceneController::request(const view::SceneRequest& request) {
         pending_preview_.reset();
         if (task_running_) {
             if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-            pool_.clear();
+            pool_->clear();
             ++generation_;
             task_running_ = false;
         }
@@ -134,7 +147,7 @@ void SceneController::request(const view::SceneRequest& request) {
 void SceneController::cancel() {
     pending_preview_.reset();
     if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    pool_.clear();
+    if (pool_ != nullptr) pool_->clear();
     ++generation_;
     task_running_ = false;
     set_busy_state(false);
@@ -163,7 +176,7 @@ void SceneController::accept_frame(
 }
 
 void SceneController::start_request(const view::SceneRequest& request) {
-    if (!model_) return;
+    if (!model_ || pool_ == nullptr) return;
 
     ++generation_;
     const std::uint64_t generation = generation_;
@@ -171,7 +184,7 @@ void SceneController::start_request(const view::SceneRequest& request) {
     active_quality_ = request.quality;
     task_running_ = true;
     set_busy_state(true);
-    pool_.start(new SceneTask(
+    pool_->start(new SceneTask(
         QPointer<SceneController>(this),
         model_,
         request,

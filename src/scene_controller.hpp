@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: 2026 quendoris
 // SPDX-License-Identifier: AGPL-3.0-only
-
 #pragma once
 
 #include "aeris/view/scene.hpp"
 #include "project_model.hpp"
 
 #include <QObject>
-#include <QThreadPool>
 
 #include <atomic>
 #include <cstdint>
@@ -16,6 +14,8 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+
+class QThreadPool;
 
 namespace aeris::desktop {
 
@@ -51,7 +51,11 @@ private:
     void set_busy_state(bool busy);
 
     std::shared_ptr<const ProjectModel> model_;
-    QThreadPool pool_;
+    // Dedicated pool is heap-owned so top-level destruction never has to join a
+    // still-running projection task. Idle pools are reclaimed immediately; a
+    // canceled active pool is intentionally detached for the remaining process
+    // lifetime while its QPointer/cancel-token protected runnable winds down.
+    QThreadPool* pool_{nullptr};
     FrameCallback frame_callback_;
     BusyCallback busy_callback_;
     std::shared_ptr<std::atomic_bool> cancel_token_;

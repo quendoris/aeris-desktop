@@ -9,6 +9,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRunnable>
+#include <QThreadPool>
 
 #include <algorithm>
 #include <cstddef>
@@ -194,13 +195,24 @@ private:
 }  // namespace
 
 ElevationDetailLoader::ElevationDetailLoader(QObject* parent)
-    : QObject(parent) {
-    pool_.setMaxThreadCount(1);
+    : QObject(parent),
+      pool_(new QThreadPool) {
+    pool_->setMaxThreadCount(1);
+    pool_->setExpiryTimeout(1000);
 }
 
 ElevationDetailLoader::~ElevationDetailLoader() {
     cancel();
-    pool_.waitForDone();
+    if (pool_ == nullptr) return;
+
+    // Detail I/O/decode is read-only and cancellation-aware. Do not block the
+    // top-level close path waiting for an in-flight SQLite stream/decode to
+    // return. An active pool is intentionally detached; its task owns the
+    // project path/resource ids and its QPointer target becomes null on QObject
+    // destruction, so it cannot publish into dead UI state.
+    pool_->clear();
+    if (pool_->waitForDone(0)) delete pool_;
+    pool_ = nullptr;
 }
 
 void ElevationDetailLoader::set_result_callback(ResultCallback callback) {
@@ -224,7 +236,7 @@ void ElevationDetailLoader::request(
         std::unique(resource_ids.begin(), resource_ids.end()),
         resource_ids.end()
     );
-    if (project_path.empty() || resource_ids.empty()) return;
+    if (project_path.empty() || resource_ids.empty() || pool_ == nullptr) return;
 
     if (task_running_ &&
         active_project_path_ == project_path &&
@@ -233,7 +245,7 @@ void ElevationDetailLoader::request(
     }
 
     if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    pool_.clear();
+    pool_->clear();
     ++generation_;
     task_running_ = false;
     active_project_path_ = std::move(project_path);
@@ -243,7 +255,7 @@ void ElevationDetailLoader::request(
 
 void ElevationDetailLoader::cancel() {
     if (cancel_token_) cancel_token_->store(true, std::memory_order_relaxed);
-    pool_.clear();
+    if (pool_ != nullptr) pool_->clear();
     ++generation_;
     task_running_ = false;
     active_project_path_.clear();
@@ -267,11 +279,12 @@ void ElevationDetailLoader::start_request(
     const std::filesystem::path& project_path,
     const std::vector<std::string>& resource_ids
 ) {
+    if (pool_ == nullptr) return;
     ++generation_;
     const std::uint64_t generation = generation_;
     cancel_token_ = std::make_shared<std::atomic_bool>(false);
     task_running_ = true;
-    pool_.start(new ElevationDetailTask(
+    pool_->start(new ElevationDetailTask(
         QPointer<ElevationDetailLoader>(this),
         project_path,
         resource_ids,

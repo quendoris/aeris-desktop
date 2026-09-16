@@ -5,7 +5,6 @@
 #include "aeris/elevation/grid.hpp"
 
 #include <QObject>
-#include <QThreadPool>
 
 #include <atomic>
 #include <cstdint>
@@ -15,6 +14,8 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+class QThreadPool;
 
 namespace aeris::desktop {
 
@@ -59,7 +60,10 @@ private:
         const std::filesystem::path& project_path,
         const std::vector<std::string>& resource_ids);
 
-    QThreadPool pool_;
+    // See SceneController: active read/decode work must never turn QObject
+    // destruction into an unbounded join. The dedicated pool can be detached on
+    // shutdown because tasks own their inputs and deliver only via QPointer.
+    QThreadPool* pool_{nullptr};
     ResultCallback result_callback_;
     std::shared_ptr<std::atomic_bool> cancel_token_;
     std::filesystem::path active_project_path_;
