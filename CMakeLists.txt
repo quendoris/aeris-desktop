@@ -157,6 +157,24 @@ target_link_libraries(aeris-desktop-project-lifecycle-probe PRIVATE
 target_compile_features(aeris-desktop-project-lifecycle-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-project-lifecycle-probe PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-data-worker-recovery-probe
+    dev/data_worker_recovery_probe.cpp
+    src/world_data_import.cpp
+    src/world_data_import.hpp
+)
+target_include_directories(aeris-desktop-data-worker-recovery-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-data-worker-recovery-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+)
+target_compile_features(aeris-desktop-data-worker-recovery-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-data-worker-recovery-probe PROPERTIES CXX_EXTENSIONS OFF)
+add_dependencies(aeris-desktop-data-worker-recovery-probe aeris-data-worker)
+
 add_executable(aeris-desktop-elevation-tiff-probe
     dev/elevation_tiff_probe.cpp
     src/elevation_tiff.cpp
@@ -281,6 +299,7 @@ if(MSVC)
     target_compile_options(aeris-data-worker PRIVATE /W4 /permissive-)
     target_compile_options(aeris-demo-project PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-data-worker-recovery-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-elevation-import-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE /W4 /permissive-)
@@ -291,6 +310,7 @@ else()
     target_compile_options(aeris-data-worker PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-demo-project PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-project-lifecycle-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-data-worker-recovery-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-elevation-tiff-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-elevation-import-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
