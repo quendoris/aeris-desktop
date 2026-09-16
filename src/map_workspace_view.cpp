@@ -324,13 +324,22 @@ MapWorkspaceView::MapWorkspaceView(QWidget* parent)
 }
 
 void MapWorkspaceView::synchronize_flag_project(const ProjectModel* model) {
-    const std::filesystem::path next =
+    const std::filesystem::path next_path =
         model != nullptr ? model->project_path : std::filesystem::path{};
-    if (next == flag_project_path_) return;
+    const std::uint64_t next_revision =
+        model != nullptr ? current_project_revision() : 0U;
+    if (next_path == flag_project_path_ &&
+        next_revision == flag_project_revision_) {
+        return;
+    }
 
+    // A durable resource mutation may replace flag bytes while the .aeris path
+    // remains unchanged. Path-only cache identity would then keep stale decoded
+    // images (or sticky failures) across the acknowledged revision boundary.
     flag_resource_loader_.cancel();
     flag_render_cache_ = {};
-    flag_project_path_ = next;
+    flag_project_path_ = next_path;
+    flag_project_revision_ = next_revision;
 }
 
 void MapWorkspaceView::dispatch_flag_resource_requests() {
