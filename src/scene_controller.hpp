@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -48,17 +49,22 @@ public:
 
 private:
     void start_request(const view::SceneRequest& request);
+    void invalidate_active_task();
     void set_busy_state(bool busy);
 
     std::shared_ptr<const ProjectModel> model_;
     // Dedicated pool is heap-owned so top-level destruction never has to join a
     // still-running projection task. Idle pools are reclaimed immediately; a
     // canceled active pool is intentionally detached for the remaining process
-    // lifetime while its QPointer/cancel-token protected runnable winds down.
+    // lifetime while its cancellation-aware runnable winds down.
     QThreadPool* pool_{nullptr};
     FrameCallback frame_callback_;
     BusyCallback busy_callback_;
     std::shared_ptr<std::atomic_bool> cancel_token_;
+    // A task may outlive this QObject after close. This short critical section
+    // serializes cancellation/destruction with the final invokeMethod handoff:
+    // close may wait for that tiny handoff, never for geometry computation.
+    std::shared_ptr<std::mutex> delivery_mutex_;
     std::optional<view::SceneRequest> pending_preview_;
     view::SceneQuality active_quality_{view::SceneQuality::preview};
     std::uint64_t generation_{0U};
