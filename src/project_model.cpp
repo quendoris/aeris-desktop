@@ -10,6 +10,7 @@
 #include <QImage>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string_view>
@@ -34,6 +35,34 @@ struct Rgb final {
     constexpr std::string_view overview_prefix = "overview:";
     return binding.slot_id.size() > overview_prefix.size() &&
         binding.slot_id.compare(0U, overview_prefix.size(), overview_prefix) == 0;
+}
+
+[[nodiscard]] bool parse_png_dimensions(
+    const std::vector<std::uint8_t>& bytes,
+    std::uint32_t& width,
+    std::uint32_t& height
+) noexcept {
+    constexpr std::array<std::uint8_t, 8U> signature{
+        0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU,
+    };
+    if (bytes.size() < 24U ||
+        !std::equal(signature.begin(), signature.end(), bytes.begin()) ||
+        bytes[12] != static_cast<std::uint8_t>('I') ||
+        bytes[13] != static_cast<std::uint8_t>('H') ||
+        bytes[14] != static_cast<std::uint8_t>('D') ||
+        bytes[15] != static_cast<std::uint8_t>('R')) {
+        return false;
+    }
+
+    const auto be32 = [&](const std::size_t offset) noexcept {
+        return (static_cast<std::uint32_t>(bytes[offset]) << 24U) |
+            (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(bytes[offset + 3U]);
+    };
+    width = be32(16U);
+    height = be32(20U);
+    return width > 0U && height > 0U;
 }
 
 [[nodiscard]] Rgb mix(const Rgb a, const Rgb b, const double t) noexcept {
@@ -313,15 +342,18 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
             }
 
             if (resource->media_type == "image/png") {
-                if (resource->bytes.empty() ||
-                    resource->bytes.size() >
-                        static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
-                    !resource->raster_image.loadFromData(
-                        reinterpret_cast<const uchar*>(resource->bytes.data()),
-                        static_cast<int>(resource->bytes.size()),
-                        "PNG"
+                // Keep PNG resources compressed on project open. Country flags
+                // are optional annotations and the renderer draws only a small
+                // viewport-bounded subset, so decoding every embedded flag here
+                // caused avoidable cold-open latency. Validate enough PNG
+                // structure to obtain exact layout dimensions; full decode is
+                // performed once, lazily, for symbols that are actually drawn.
+                if (!parse_png_dimensions(
+                        resource->bytes,
+                        resource->raster_width,
+                        resource->raster_height
                     )) {
-                    return {nullptr, "embedded PNG resource failed image decoding: " + resource_id};
+                    return {nullptr, "embedded PNG resource has invalid signature/IHDR: " + resource_id};
                 }
             } else if (resource->media_type == elevation::kElevationTileMediaType) {
                 elevation::ElevationTileDecodeResult decoded =
