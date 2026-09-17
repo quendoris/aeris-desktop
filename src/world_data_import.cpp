@@ -26,8 +26,12 @@ constexpr std::string_view kLandContentSha =
     "5a9d2b70be942d7d0602ef299afe0ef039463831ade478aae11091f8c202cf6e";
 constexpr std::string_view kAdmin0ContentSha =
     "2d971b3c627462cb22fdcd1468a8972b2a66677585fabcaa520bc6937ef47fb0";
+constexpr std::string_view kSurfaceContentSha =
+    "8b37e1c1612be041756a7062a6e5d12d7c130892bd26dcfc10c5be7884c7d281";
 constexpr std::string_view kPhysicalSourceId = "world.land.natural-earth-110m";
 constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
+constexpr std::string_view kSurfaceSourceId =
+    "world.surface.antarctic-ice-shelves-natural-earth-50m";
 
 [[nodiscard]] WorldDataImportResult failure(std::string diagnostic) {
     return {false, false, std::move(diagnostic)};
@@ -57,6 +61,38 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     manifest.resources.push_back({
         "dataset.version",
         "ne_110m_land.VERSION.txt",
+        "3b10b6ad566eadbcacadb33c591f1ec629593d6adf47442e56e0f61996829ef7",
+        6U,
+    });
+    return manifest;
+}
+
+[[nodiscard]] source::SnapshotManifest surface_manifest(
+    const std::string_view retrieved_at
+) {
+    source::SnapshotManifest manifest{};
+    manifest.provider = "Natural Earth";
+    manifest.dataset = "ne_50m_antarctic_ice_shelves_polys";
+    manifest.snapshot = std::string(kSnapshot);
+    manifest.source_uri =
+        "https://github.com/nvkelso/natural-earth-vector/tree/"
+        "f1890d9f152c896d250a77557a5751a93d494776/50m_physical";
+    manifest.retrieved_at_utc = std::string(retrieved_at);
+    manifest.resources.push_back({
+        "geometry.shp",
+        "ne_50m_antarctic_ice_shelves_polys.shp",
+        "05d06b075deb3e4119f0510788b03af7100f2c25b060d5cfdd126fb6817004db",
+        83960U,
+    });
+    manifest.resources.push_back({
+        "crs.prj",
+        "ne_50m_antarctic_ice_shelves_polys.prj",
+        "3259f0e55290a82b1350646f604e8a7ee1e2136c0320a40fad838ab40819fff8",
+        147U,
+    });
+    manifest.resources.push_back({
+        "dataset.version",
+        "ne_50m_antarctic_ice_shelves_polys.VERSION.txt",
         "3b10b6ad566eadbcacadb33c591f1ec629593d6adf47442e56e0f61996829ef7",
         6U,
     });
@@ -166,6 +202,16 @@ constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m
     return binding;
 }
 
+[[nodiscard]] source::SourceBinding surface_binding() {
+    source::SourceBinding binding{};
+    binding.adapter_id =
+        "natural-earth.ne-50m-antarctic-ice-shelves.surface-classification.v1";
+    binding.capability = source::Capability::surface_classification;
+    binding.snapshot = std::string(kSnapshot);
+    binding.expected_content_sha256 = std::string(kSurfaceContentSha);
+    return binding;
+}
+
 }  // namespace
 
 WorldDataImportResult import_natural_earth_110m_world(
@@ -208,10 +254,24 @@ WorldDataImportResult import_natural_earth_110m_world(
         return failure("Natural Earth admin0 pack aggregate content identity mismatch");
     }
 
+    source::SnapshotVerificationResult surface_verified =
+        source::verify_local_snapshot(source_root, surface_manifest(modified_utc));
+    if (!surface_verified.ok() || !surface_verified.snapshot.has_value()) {
+        return failure(
+            "Natural Earth Antarctic surface-classification verification failed: " +
+            surface_verified.diagnostic
+        );
+    }
+    if (surface_verified.snapshot->content_sha256() != kSurfaceContentSha) {
+        return failure("Natural Earth surface-classification aggregate content identity mismatch");
+    }
+
     source::AdapterRegistry registry{};
     if (registry.add(std::make_unique<source::NaturalEarthLand110mAdapter>()) !=
             source::RegistryError::none ||
         registry.add(std::make_unique<source::NaturalEarthAdmin0Cartography110mAdapter>()) !=
+            source::RegistryError::none ||
+        registry.add(std::make_unique<source::NaturalEarthAntarcticIceShelves50mAdapter>()) !=
             source::RegistryError::none) {
         return failure("could not register built-in Natural Earth adapters");
     }
@@ -256,6 +316,26 @@ WorldDataImportResult import_natural_earth_110m_world(
     }
     changed = changed || admin.inserted;
 
+    project::VerifiedSourceRecordRequest surface_request{};
+    surface_request.source_id = std::string(kSurfaceSourceId);
+    surface_request.binding = surface_binding();
+    surface_request.modified_utc = std::string(modified_utc);
+    const project::SourceBridgeResult surface = project::record_verified_source_snapshot(
+        project,
+        registry,
+        *surface_verified.snapshot,
+        surface_request
+    );
+    if (!surface.ok()) {
+        return {
+            false,
+            changed || surface.inserted || surface.durably_committed,
+            "Natural Earth Antarctic surface-classification import failed: " +
+                surface.diagnostic,
+        };
+    }
+    changed = changed || surface.inserted;
+
     project::BuiltinWorldLayerSources sources{};
     sources.physical_source_id = std::string(kPhysicalSourceId);
     sources.political_source_id = std::string(kPoliticalSourceId);
@@ -270,6 +350,22 @@ WorldDataImportResult import_natural_earth_110m_world(
     }
     changed = changed || layers.changed;
 
+    const project::WorldLayerStackResult surface_layer =
+        project::ensure_builtin_surface_classification_layer(
+            project,
+            kSurfaceSourceId,
+            modified_utc
+        );
+    if (!surface_layer.ok()) {
+        return {
+            false,
+            changed || surface_layer.changed || surface_layer.durably_committed,
+            "surface-classification layer initialization failed: " +
+                surface_layer.diagnostic,
+        };
+    }
+    changed = changed || surface_layer.changed;
+
     const storage::Status integrity = project.verify_integrity();
     if (!integrity.ok()) {
         return {
@@ -283,8 +379,8 @@ WorldDataImportResult import_natural_earth_110m_world(
         true,
         changed,
         changed
-            ? "verified Natural Earth world + cartographic palette imported into durable .aeris storage"
-            : "verified Natural Earth world already present",
+            ? "verified Natural Earth world + semantic surface classification imported into durable .aeris storage"
+            : "verified Natural Earth world and semantic surface classification already present",
     };
 }
 

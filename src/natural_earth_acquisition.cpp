@@ -31,6 +31,9 @@ constexpr std::string_view kCommit =
 constexpr std::string_view kPhysicalBase =
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
     "f1890d9f152c896d250a77557a5751a93d494776/110m_physical/";
+constexpr std::string_view kSurfaceBase =
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
+    "f1890d9f152c896d250a77557a5751a93d494776/50m_physical/";
 constexpr std::string_view kCulturalBase =
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
     "f1890d9f152c896d250a77557a5751a93d494776/110m_cultural/";
@@ -353,7 +356,7 @@ NaturalEarthAcquisitionResult acquire_natural_earth_110m_world(
     std::string diagnostic;
     if (!ensure_directory(cache_root, diagnostic)) return {false, {}, std::move(diagnostic)};
 
-    const std::array<RemoteResource, 3> remote{{
+    const std::array<RemoteResource, 4> remote{{
         {
             "ne_110m_land.shp",
             std::string(kPhysicalBase) + "ne_110m_land.shp",
@@ -372,18 +375,28 @@ NaturalEarthAcquisitionResult acquire_natural_earth_110m_world(
             "1fee677cd4e03b367876e03861eb10197e4022a846bf92060e0313432863785b",
             "Downloading political attributes",
         },
+        {
+            "ne_50m_antarctic_ice_shelves_polys.shp",
+            std::string(kSurfaceBase) + "ne_50m_antarctic_ice_shelves_polys.shp",
+            "05d06b075deb3e4119f0510788b03af7100f2c25b060d5cfdd126fb6817004db",
+            "Downloading Antarctic ice-shelf classification",
+        },
     }};
 
     const std::string wgs84_prj =
         "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\","
         "6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\","
         "0.017453292519943295]]";
-    const std::array<LocalResource, 5> local{{
+    const std::array<LocalResource, 7> local{{
         {"ne_110m_land.prj", wgs84_prj,
          "3259f0e55290a82b1350646f604e8a7ee1e2136c0320a40fad838ab40819fff8"},
         {"ne_110m_admin_0_countries.prj", wgs84_prj,
          "3259f0e55290a82b1350646f604e8a7ee1e2136c0320a40fad838ab40819fff8"},
+        {"ne_50m_antarctic_ice_shelves_polys.prj", wgs84_prj,
+         "3259f0e55290a82b1350646f604e8a7ee1e2136c0320a40fad838ab40819fff8"},
         {"ne_110m_land.VERSION.txt", "4.1.0\n",
+         "3b10b6ad566eadbcacadb33c591f1ec629593d6adf47442e56e0f61996829ef7"},
+        {"ne_50m_antarctic_ice_shelves_polys.VERSION.txt", "4.1.0\n",
          "3b10b6ad566eadbcacadb33c591f1ec629593d6adf47442e56e0f61996829ef7"},
         {"ne_110m_admin_0_countries.cpg", "UTF-8",
          "3ad3031f5503a4404af825262ee8232cc04d4ea6683d42c5dd0a2f2a27ac9824"},
@@ -409,7 +422,7 @@ NaturalEarthAcquisitionResult acquire_natural_earth_110m_world(
         progress,
         1U,
         1U,
-        "Pinned Natural Earth snapshot verified"
+        "Pinned Natural Earth snapshot + surface semantics verified"
     );
     return {
         true,
