@@ -6,6 +6,7 @@
 #include "world_data_import.hpp"
 
 #include "aeris/storage/project.hpp"
+#include "aeris/storage/resource.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -70,7 +71,7 @@ int main(const int argc, char** argv) {
     }
     if (expanded.model->layers.size() != 5U || expanded.model->sources.size() != 2U ||
         !expanded.model->resources.empty()) {
-        return fail(8, "world import did not expand project to 5 layers / 2 sources / 0 resources");
+        return fail(8, "world import did not expand project to 5 layers / 2 sources / 0 eager resources");
     }
 
     const auto political = expanded.model->sources.find(std::string(kPoliticalSourceId));
@@ -117,8 +118,8 @@ int main(const int argc, char** argv) {
         return fail(15, "flag-decorated project reload failed: " + decorated.diagnostic);
     }
     if (decorated.model->layers.size() != 6U || decorated.model->sources.size() != 2U ||
-        decorated.model->resources.size() != flags.flag_count) {
-        return fail(16, "flag import did not produce 6 layers / 2 sources / exact embedded resources");
+        !decorated.model->resources.empty()) {
+        return fail(16, "flag import did not produce 6 layers / 2 sources / 0 eager PNG resources");
     }
 
     const aeris::storage::ProjectLayerRecord* flag_layer = nullptr;
@@ -133,23 +134,32 @@ int main(const int argc, char** argv) {
         return fail(17, "Country flags layer bindings are incomplete after reopen");
     }
 
-    std::size_t lazily_encoded_flags = 0U;
-    for (const auto& resource_entry : decorated.model->resources) {
-        const auto& resource = resource_entry.second;
-        if (!resource || resource->media_type != "image/png" || resource->bytes.empty() ||
-            resource->raster_width == 0U || resource->raster_height == 0U ||
-            !resource->raster_image.isNull() || resource->raster_decode_attempted) {
-            return fail(18, "embedded flag resource did not reopen as validated lazy PNG bytes");
-        }
-        ++lazily_encoded_flags;
+    // Lazy frontend loading must not weaken durable truth. The .aeris file still
+    // owns every exact PNG resource; load_project_model() simply stops streaming
+    // those optional presentation bytes during cold open.
+    const auto durable_resources = aeris::storage::list_project_resources(*created.store);
+    if (!durable_resources.ok()) {
+        return fail(18, "unable to enumerate durable flag resources: " + durable_resources.status.diagnostic);
     }
-    if (lazily_encoded_flags != flags.flag_count) {
-        return fail(19, "not every embedded flag remained lazily encoded after reopen");
+
+    std::size_t embedded_png_flags = 0U;
+    for (const auto& record : durable_resources.records) {
+        if (record.identity.media_type != "image/png") continue;
+        if (record.storage_mode != aeris::storage::ResourceStorageMode::embedded ||
+            record.identity.size_bytes == 0U || record.identity.sha256.size() != 64U ||
+            record.chunk_count == 0U) {
+            return fail(19, "durable flag resource lost embedded content identity");
+        }
+        ++embedded_png_flags;
+    }
+    if (embedded_png_flags != flags.flag_count ||
+        durable_resources.records.size() != flags.flag_count) {
+        return fail(20, "durable .aeris flag resource count differs from imported bindings");
     }
 
     const auto integrity = created.store->verify_integrity();
     if (!integrity.ok()) {
-        return fail(20, "decorated project integrity failed: " + integrity.diagnostic);
+        return fail(21, "decorated project integrity failed: " + integrity.diagnostic);
     }
 
     std::cout
@@ -158,8 +168,8 @@ int main(const int argc, char** argv) {
         << " world_layers=5 world_sources=2"
         << " political_palette_classes=" << palette_assignments.size()
         << " decorated_layers=" << decorated.model->layers.size()
-        << " embedded_flags=" << flags.flag_count
-        << " lazy_flag_pixels=" << lazily_encoded_flags
+        << " embedded_flags=" << embedded_png_flags
+        << " eager_flag_resources=" << decorated.model->resources.size()
         << " revision=" << created.store->metadata().revision
         << '\n';
     return EXIT_SUCCESS;

@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -104,83 +103,65 @@ namespace {
         static_cast<double>(viewport.width()) * static_cast<double>(viewport.height())
     );
 
-    // At a fitted whole-world view the transformed scene occupies roughly one
-    // viewport. When the user zooms, this ratio grows approximately with zoom²,
-    // so its square root is a renderer-independent screen-detail scale.
-    const double detail_scale = std::sqrt(std::max(1.0, scene_device_area / viewport_area));
+    const double detail_scale = std::sqrt(
+        std::max(1.0, scene_device_area / viewport_area)
+    );
     const double base_budget = globe ? 12.0 : 16.0;
-    const auto budget = static_cast<std::size_t>(std::lround(base_budget * detail_scale));
+    const auto budget = static_cast<std::size_t>(
+        std::lround(base_budget * detail_scale)
+    );
     return std::clamp<std::size_t>(budget, globe ? 12U : 16U, 80U);
 }
 
-[[nodiscard]] const QImage* decoded_flag_image(
-    const EmbeddedProjectResource& resource
+[[nodiscard]] bool already_requested(
+    const FlagRenderCache& cache,
+    const std::string& resource_id
 ) {
-    if (resource.media_type != "image/png" ||
-        resource.raster_width == 0U || resource.raster_height == 0U) {
-        return nullptr;
-    }
-    if (!resource.raster_image.isNull()) return &resource.raster_image;
-    if (resource.raster_decode_attempted) return nullptr;
-
-    resource.raster_decode_attempted = true;
-    if (resource.bytes.empty() ||
-        resource.bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return nullptr;
-    }
-
-    QImage decoded;
-    if (!decoded.loadFromData(
-            reinterpret_cast<const uchar*>(resource.bytes.data()),
-            static_cast<int>(resource.bytes.size()),
-            "PNG"
-        ) ||
-        decoded.width() != static_cast<int>(resource.raster_width) ||
-        decoded.height() != static_cast<int>(resource.raster_height)) {
-        return nullptr;
-    }
-    resource.raster_image = std::move(decoded);
-    return &resource.raster_image;
+    return std::find(
+        cache.pending_resources.begin(),
+        cache.pending_resources.end(),
+        resource_id
+    ) != cache.pending_resources.end();
 }
 
 struct FlagCandidate final {
-    const EmbeddedProjectResource* resource{nullptr};
+    std::string resource_id;
     QRectF rect;
     double score{0.0};
 };
 
 }  // namespace
 
+void begin_flag_render_pass(FlagRenderCache& cache) {
+    cache.pending_resources.clear();
+}
+
 void draw_country_flags(
     QPainter& painter,
     const storage::ProjectLayerRecord& layer,
     const view::SceneGeometry& scene,
     const source::Result& source_result,
-    const ProjectModel& model
+    FlagRenderCache& cache
 ) {
     if (!layer.visible || !source_result.feature_properties_complete) return;
 
-    std::unordered_map<std::string, const EmbeddedProjectResource*> flag_resources;
-    flag_resources.reserve(layer.resources.size());
+    // Layer bindings are enough to select candidate flag resource IDs. The
+    // durable PNG payload itself intentionally is not part of ProjectModel.
+    std::unordered_map<std::string, std::string> flag_resource_ids;
+    flag_resource_ids.reserve(layer.resources.size());
     for (const storage::LayerResourceBinding& binding : layer.resources) {
         constexpr std::string_view prefix = "flag:";
         if (binding.slot_id.size() <= prefix.size() ||
-            binding.slot_id.compare(0U, prefix.size(), prefix) != 0) {
+            binding.slot_id.compare(0U, prefix.size(), prefix) != 0 ||
+            binding.resource_id.empty()) {
             continue;
         }
-        const auto resource = model.resources.find(binding.resource_id);
-        if (resource == model.resources.end() || !resource->second ||
-            resource->second->media_type != "image/png" ||
-            resource->second->raster_width == 0U ||
-            resource->second->raster_height == 0U) {
-            continue;
-        }
-        flag_resources.emplace(
+        flag_resource_ids.emplace(
             binding.slot_id.substr(prefix.size()),
-            resource->second.get()
+            binding.resource_id
         );
     }
-    if (flag_resources.empty()) return;
+    if (flag_resource_ids.empty()) return;
 
     std::unordered_map<std::string, const source::Feature*> source_features;
     source_features.reserve(source_result.features.size());
@@ -190,8 +171,10 @@ void draw_country_flags(
 
     const QTransform world = painter.worldTransform();
     const double device_area_scale = std::abs(world.determinant());
-    const bool globe = scene.mode == view::SurfaceMode::globe && scene.globe_radius_m > 0.0;
-    const std::size_t max_symbols = symbol_budget(painter, scene, device_area_scale, globe);
+    const bool globe =
+        scene.mode == view::SurfaceMode::globe && scene.globe_radius_m > 0.0;
+    const std::size_t max_symbols =
+        symbol_budget(painter, scene, device_area_scale, globe);
     QPointF globe_center{};
     double globe_radius_px = 0.0;
     if (globe) {
@@ -211,8 +194,8 @@ void draw_country_flags(
         const auto iso = text_property(*source_found->second, "iso_a2");
         if (!iso.has_value() || iso->size() != 2U) continue;
         const std::string code = ascii_lower(*iso);
-        const auto flag = flag_resources.find(code);
-        if (flag == flag_resources.end()) continue;
+        const auto flag = flag_resource_ids.find(code);
+        if (flag == flag_resource_ids.end()) continue;
 
         const std::vector<geometry::PlanarPoint>* largest = nullptr;
         double largest_area = 0.0;
@@ -228,15 +211,18 @@ void draw_country_flags(
         if (!anchor.has_value()) continue;
 
         const double projected_area = largest_area * device_area_scale;
-        // A flag is an annotation, not a substitute for the political fill.
-        // Require enough screen-space country area that the symbol remains a
-        // useful secondary cue instead of turning the whole-world map into an
-        // icon sheet. Zoom naturally increases projected_area quadratically.
         if (projected_area < 2600.0) continue;
 
-        const EmbeddedProjectResource& resource = *flag->second;
-        const double aspect = static_cast<double>(resource.raster_width) /
-            static_cast<double>(resource.raster_height);
+        // Before the PNG is resident use a neutral 3:2 placeholder aspect only
+        // for collision/layout. Loaded images immediately use their exact size.
+        double aspect = 1.5;
+        const auto loaded = cache.images.find(flag->second);
+        if (loaded != cache.images.end() &&
+            !loaded->second.isNull() && loaded->second.height() > 0) {
+            aspect = static_cast<double>(loaded->second.width()) /
+                static_cast<double>(loaded->second.height());
+        }
+
         double width = 24.0;
         double height = width / aspect;
         if (height > 16.0) {
@@ -247,10 +233,6 @@ void draw_country_flags(
         height = std::max(height, 8.0);
 
         const QPointF device = world.map(QPointF(anchor->x, anchor->y));
-        // Country labels use the same geographic anchor in the base renderer.
-        // Keep the flag as a companion symbol above that anchor rather than
-        // covering the label text while both systems still have independent
-        // collision passes.
         const double vertical_offset = 10.0 + height * 0.5;
         const QRectF rect(
             device.x() - width * 0.5,
@@ -259,8 +241,11 @@ void draw_country_flags(
             height
         );
         if (!painter.viewport().intersects(rect.toAlignedRect())) continue;
-        if (globe && !rect_inside_circle(rect, globe_center, globe_radius_px - 2.0)) continue;
-        candidates.push_back({&resource, rect, projected_area});
+        if (globe &&
+            !rect_inside_circle(rect, globe_center, globe_radius_px - 2.0)) {
+            continue;
+        }
+        candidates.push_back({flag->second, rect, projected_area});
     }
 
     std::sort(
@@ -275,7 +260,11 @@ void draw_country_flags(
     painter.resetTransform();
     if (globe && globe_radius_px > 1.0) {
         QPainterPath clip;
-        clip.addEllipse(globe_center, globe_radius_px - 1.0, globe_radius_px - 1.0);
+        clip.addEllipse(
+            globe_center,
+            globe_radius_px - 1.0,
+            globe_radius_px - 1.0
+        );
         painter.setClipPath(clip, Qt::IntersectClip);
     }
 
@@ -290,22 +279,69 @@ void draw_country_flags(
                 break;
             }
         }
-        if (collides || candidate.resource == nullptr) continue;
+        if (collides) continue;
 
-        // Decode only after viewport selection and collision rejection. A
-        // whole-world frame therefore touches at most the small symbol budget,
-        // not every embedded country flag in the project.
-        const QImage* image = decoded_flag_image(*candidate.resource);
-        if (image == nullptr) continue;
+        const auto loaded = cache.images.find(candidate.resource_id);
+        if (loaded == cache.images.end() || loaded->second.isNull()) {
+            if (cache.failed_resources.find(candidate.resource_id) ==
+                    cache.failed_resources.end() &&
+                cache.pending_resources.size() < kFlagResourceLoadBatchLimit &&
+                !already_requested(cache, candidate.resource_id)) {
+                cache.pending_resources.push_back(candidate.resource_id);
+            }
+            continue;
+        }
 
         painter.setPen(QPen(QColor(235, 237, 239, 190), 1.0));
         painter.setBrush(QColor(18, 21, 24, 180));
-        painter.drawRoundedRect(candidate.rect.adjusted(-1.5, -1.5, 1.5, 1.5), 1.5, 1.5);
-        painter.drawImage(candidate.rect, *image);
+        painter.drawRoundedRect(
+            candidate.rect.adjusted(-1.5, -1.5, 1.5, 1.5),
+            1.5,
+            1.5
+        );
+        painter.drawImage(candidate.rect, loaded->second);
         occupied.push_back(collision);
         if (occupied.size() >= max_symbols) break;
     }
     painter.restore();
+}
+
+const std::vector<std::string>& flag_resource_requests(
+    const FlagRenderCache& cache
+) noexcept {
+    return cache.pending_resources;
+}
+
+bool accept_flag_resource(
+    FlagRenderCache& cache,
+    std::string resource_id,
+    QImage image
+) {
+    if (resource_id.empty() || image.isNull()) return false;
+    cache.failed_resources.erase(resource_id);
+    const auto found = cache.images.find(resource_id);
+    if (found != cache.images.end()) {
+        found->second = std::move(image);
+        return true;
+    }
+    cache.images.emplace(std::move(resource_id), std::move(image));
+    return true;
+}
+
+void reject_flag_resource(
+    FlagRenderCache& cache,
+    const std::string_view resource_id
+) {
+    if (resource_id.empty()) return;
+    cache.failed_resources.emplace(resource_id);
+    cache.pending_resources.erase(
+        std::remove(
+            cache.pending_resources.begin(),
+            cache.pending_resources.end(),
+            resource_id
+        ),
+        cache.pending_resources.end()
+    );
 }
 
 }  // namespace aeris::desktop

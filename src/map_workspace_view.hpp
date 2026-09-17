@@ -3,13 +3,20 @@
 
 #pragma once
 
+#include "flag_renderer.hpp"
+#include "flag_resource_loader.hpp"
 #include "map_view.hpp"
+
+#include <cstdint>
+#include <filesystem>
+#include <vector>
 
 namespace aeris::desktop {
 
 // Tool overlays are presentation-only. The base MapView remains responsible
 // for canonical scene/layer rendering and navigation, while this workspace can
-// add transient editing guides such as the projection cut.
+// add transient editing guides such as the projection cut and rebuildable
+// viewport-bounded symbol caches.
 class MapWorkspaceView final : public MapView {
     Q_OBJECT
 
@@ -39,11 +46,22 @@ protected:
     void leaveEvent(QEvent* event) override;
 
 private:
+    void synchronize_flag_project(const ProjectModel* model);
+    void dispatch_flag_resource_requests();
+    void accept_flag_resource_results(
+        std::filesystem::path project_path,
+        std::vector<FlagResourceLoadResult> results);
+
     bool unfold_tool_active_{false};
     bool dragging_projection_cut_{false};
     bool projection_cut_pointer_active_{false};
     QPointF projection_cut_pointer_device_{};
     view::SurfaceMode unfold_target_mode_{view::SurfaceMode::sinu_mollweide};
+
+    FlagResourceLoader flag_resource_loader_;
+    FlagRenderCache flag_render_cache_;
+    std::filesystem::path flag_project_path_;
+    std::uint64_t flag_project_revision_{0U};
 };
 
 }  // namespace aeris::desktop
