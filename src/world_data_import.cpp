@@ -11,7 +11,9 @@
 #include "aeris/source/registry.hpp"
 #include "aeris/util/sha256.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -212,6 +214,85 @@ constexpr std::string_view kSurfaceSourceId =
     return binding;
 }
 
+[[nodiscard]] const storage::ProjectLayerRecord* find_layer(
+    const std::vector<storage::ProjectLayerRecord>& layers,
+    const std::string_view layer_id
+) noexcept {
+    const auto found = std::find_if(
+        layers.begin(),
+        layers.end(),
+        [&](const storage::ProjectLayerRecord& layer) {
+            return layer.layer_id == layer_id;
+        }
+    );
+    return found == layers.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] bool exact_source_slots(
+    const storage::ProjectLayerRecord& layer,
+    const std::initializer_list<std::pair<std::string_view, std::string_view>> expected
+) noexcept {
+    if (!layer.resources.empty() || layer.sources.size() != expected.size()) return false;
+    for (const auto& [slot, source_id] : expected) {
+        const auto found = std::find_if(
+            layer.sources.begin(),
+            layer.sources.end(),
+            [&](const storage::LayerSourceBinding& binding) {
+                return binding.slot_id == slot && binding.source_id == source_id;
+            }
+        );
+        if (found == layer.sources.end()) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<bool> builtin_world_stack_present(
+    storage::ProjectStore& project,
+    std::string& diagnostic
+) {
+    const storage::ProjectLayerListResult listed = storage::list_project_layers(project);
+    if (!listed.ok()) {
+        diagnostic = "could not inspect existing world layer stack: " + listed.status.diagnostic;
+        return std::nullopt;
+    }
+
+    const auto valid = [&](
+        const std::string_view id,
+        const std::string_view role,
+        const std::initializer_list<std::pair<std::string_view, std::string_view>> slots
+    ) {
+        const storage::ProjectLayerRecord* layer = find_layer(listed.records, id);
+        return layer != nullptr && layer->role_id == role && exact_source_slots(*layer, slots);
+    };
+
+    return
+        valid(
+            project::kBuiltinPoliticalLabelsLayerId,
+            storage::kLayerRoleCountryLabelV1,
+            {{"properties", kPoliticalSourceId}}
+        ) &&
+        valid(
+            project::kBuiltinPoliticalBordersLayerId,
+            storage::kLayerRolePoliticalBoundaryV1,
+            {{"geometry", kPoliticalSourceId}}
+        ) &&
+        valid(
+            project::kBuiltinPoliticalCountriesLayerId,
+            storage::kLayerRolePoliticalCountryFillV1,
+            {{"geometry", kPoliticalSourceId}, {"properties", kPoliticalSourceId}}
+        ) &&
+        valid(
+            project::kBuiltinPhysicalCoastlineLayerId,
+            storage::kLayerRolePhysicalCoastlineV1,
+            {{"geometry", kPhysicalSourceId}}
+        ) &&
+        valid(
+            project::kBuiltinPhysicalLandLayerId,
+            storage::kLayerRolePhysicalLandFillV1,
+            {{"geometry", kPhysicalSourceId}}
+        );
+}
+
 }  // namespace
 
 WorldDataImportResult import_natural_earth_110m_world(
@@ -336,19 +417,27 @@ WorldDataImportResult import_natural_earth_110m_world(
     }
     changed = changed || surface.inserted;
 
-    project::BuiltinWorldLayerSources sources{};
-    sources.physical_source_id = std::string(kPhysicalSourceId);
-    sources.political_source_id = std::string(kPoliticalSourceId);
-    const project::WorldLayerStackResult layers =
-        project::initialize_builtin_world_layer_stack(project, sources, modified_utc);
-    if (!layers.ok()) {
-        return {
-            false,
-            changed || layers.changed || layers.durably_committed,
-            "built-in world layer initialization failed: " + layers.diagnostic,
-        };
+    std::string stack_diagnostic;
+    const std::optional<bool> existing_world =
+        builtin_world_stack_present(project, stack_diagnostic);
+    if (!existing_world.has_value()) {
+        return {false, changed, std::move(stack_diagnostic)};
     }
-    changed = changed || layers.changed;
+    if (!*existing_world) {
+        project::BuiltinWorldLayerSources sources{};
+        sources.physical_source_id = std::string(kPhysicalSourceId);
+        sources.political_source_id = std::string(kPoliticalSourceId);
+        const project::WorldLayerStackResult layers =
+            project::initialize_builtin_world_layer_stack(project, sources, modified_utc);
+        if (!layers.ok()) {
+            return {
+                false,
+                changed || layers.changed || layers.durably_committed,
+                "built-in world layer initialization failed: " + layers.diagnostic,
+            };
+        }
+        changed = changed || layers.changed;
+    }
 
     const project::WorldLayerStackResult surface_layer =
         project::ensure_builtin_surface_classification_layer(
