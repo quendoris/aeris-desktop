@@ -9,6 +9,7 @@
 #include "aeris/source/natural_earth.hpp"
 #include "aeris/source/natural_earth_cartography.hpp"
 #include "aeris/source/registry.hpp"
+#include "aeris/storage/provenance.hpp"
 #include "aeris/util/sha256.hpp"
 
 #include <algorithm>
@@ -34,6 +35,15 @@ constexpr std::string_view kPhysicalSourceId = "world.land.natural-earth-110m";
 constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
 constexpr std::string_view kSurfaceSourceId =
     "world.surface.antarctic-ice-shelves-natural-earth-50m";
+
+struct SourceEnsureResult final {
+    bool success{false};
+    bool inserted{false};
+    bool durably_committed{false};
+    std::string diagnostic;
+
+    [[nodiscard]] bool ok() const noexcept { return success; }
+};
 
 [[nodiscard]] WorldDataImportResult failure(std::string diagnostic) {
     return {false, false, std::move(diagnostic)};
@@ -214,6 +224,123 @@ constexpr std::string_view kSurfaceSourceId =
     return binding;
 }
 
+[[nodiscard]] bool resource_identity_matches(
+    const storage::SourceResourceRecord& stored,
+    const source::ResourceSpec& expected
+) noexcept {
+    if (stored.logical_name != expected.logical_name || stored.sha256 != expected.sha256 ||
+        stored.size_bytes.has_value() != expected.size_bytes.has_value()) {
+        return false;
+    }
+    if (!stored.size_bytes.has_value()) return true;
+    return static_cast<std::uintmax_t>(*stored.size_bytes) == *expected.size_bytes;
+}
+
+[[nodiscard]] bool source_resources_match(
+    const storage::SourceSnapshotRecord& stored,
+    const source::SnapshotManifest& manifest
+) noexcept {
+    if (stored.resources.size() != manifest.resources.size()) return false;
+    for (const source::ResourceSpec& expected : manifest.resources) {
+        const auto found = std::find_if(
+            stored.resources.begin(),
+            stored.resources.end(),
+            [&](const storage::SourceResourceRecord& candidate) {
+                return candidate.logical_name == expected.logical_name;
+            }
+        );
+        if (found == stored.resources.end() ||
+            !resource_identity_matches(*found, expected)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] SourceEnsureResult ensure_verified_source(
+    storage::ProjectStore& project,
+    const source::AdapterRegistry& registry,
+    const source::VerifiedSnapshot& snapshot,
+    const project::VerifiedSourceRecordRequest& request
+) {
+    const storage::SourceSnapshotListResult listed = storage::list_source_snapshots(project);
+    if (!listed.ok()) {
+        return {
+            false,
+            false,
+            false,
+            "could not inspect durable source provenance: " + listed.status.diagnostic,
+        };
+    }
+
+    const auto existing = std::find_if(
+        listed.records.begin(),
+        listed.records.end(),
+        [&](const storage::SourceSnapshotRecord& record) {
+            return record.source_id == request.source_id;
+        }
+    );
+    if (existing == listed.records.end()) {
+        const project::SourceBridgeResult recorded =
+            project::record_verified_source_snapshot(project, registry, snapshot, request);
+        return {
+            recorded.ok(),
+            recorded.inserted,
+            recorded.durably_committed,
+            recorded.diagnostic,
+        };
+    }
+
+    const source::RegistryLoadResult expected = registry.load(request.binding, snapshot);
+    if (!expected.ok()) {
+        return {
+            false,
+            false,
+            false,
+            expected.diagnostic.empty()
+                ? "source registry rejected verified snapshot during durable-source reuse"
+                : expected.diagnostic,
+        };
+    }
+    const source::Adapter* adapter = registry.find(request.binding.adapter_id);
+    if (adapter == nullptr) {
+        return {false, false, false, "source adapter disappeared during durable-source reuse"};
+    }
+
+    const source::Provenance& provenance = expected.source.provenance;
+    const source::SnapshotManifest& manifest = snapshot.manifest();
+    const source::AdapterDescriptor descriptor = adapter->descriptor();
+    const bool immutable_identity_matches =
+        existing->adapter_id == request.binding.adapter_id &&
+        existing->capability_bits == source::capability_bit(request.binding.capability) &&
+        existing->temporal_class == static_cast<std::uint8_t>(descriptor.temporal_class) &&
+        existing->provider == provenance.provider &&
+        existing->dataset == provenance.dataset &&
+        existing->snapshot == provenance.snapshot &&
+        existing->dataset_version == provenance.dataset_version &&
+        existing->source_uri == provenance.source_uri &&
+        existing->license_id == provenance.license_id &&
+        existing->content_sha256 == provenance.content_sha256 &&
+        existing->worldview == provenance.worldview &&
+        source_resources_match(*existing, manifest);
+
+    if (!immutable_identity_matches) {
+        return {
+            false,
+            false,
+            false,
+            "durable source '" + request.source_id +
+                "' conflicts with the exact verified built-in source identity",
+        };
+    }
+
+    // retrieved_at_utc intentionally remains the timestamp of the acquisition
+    // that originally created this durable source. A later repair validates the
+    // same immutable bytes and adapter identity but must not rewrite provenance
+    // merely because the application happened to run again at a new time.
+    return {true, false, false, {}};
+}
+
 [[nodiscard]] const storage::ProjectLayerRecord* find_layer(
     const std::vector<storage::ProjectLayerRecord>& layers,
     const std::string_view layer_id
@@ -256,7 +383,7 @@ constexpr std::string_view kSurfaceSourceId =
         return std::nullopt;
     }
 
-    const auto valid = [&](
+    const auto valid = [&] (
         const std::string_view id,
         const std::string_view role,
         const std::initializer_list<std::pair<std::string_view, std::string_view>> slots
@@ -363,7 +490,7 @@ WorldDataImportResult import_natural_earth_110m_world(
     land_request.source_id = std::string(kPhysicalSourceId);
     land_request.binding = land_binding();
     land_request.modified_utc = std::string(modified_utc);
-    const project::SourceBridgeResult land = project::record_verified_source_snapshot(
+    const SourceEnsureResult land = ensure_verified_source(
         project,
         registry,
         *land_verified.snapshot,
@@ -382,7 +509,7 @@ WorldDataImportResult import_natural_earth_110m_world(
     admin_request.source_id = std::string(kPoliticalSourceId);
     admin_request.binding = admin0_binding();
     admin_request.modified_utc = std::string(modified_utc);
-    const project::SourceBridgeResult admin = project::record_verified_source_snapshot(
+    const SourceEnsureResult admin = ensure_verified_source(
         project,
         registry,
         *admin_verified.snapshot,
@@ -401,7 +528,7 @@ WorldDataImportResult import_natural_earth_110m_world(
     surface_request.source_id = std::string(kSurfaceSourceId);
     surface_request.binding = surface_binding();
     surface_request.modified_utc = std::string(modified_utc);
-    const project::SourceBridgeResult surface = project::record_verified_source_snapshot(
+    const SourceEnsureResult surface = ensure_verified_source(
         project,
         registry,
         *surface_verified.snapshot,
