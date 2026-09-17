@@ -5,6 +5,8 @@
 
 #include "map_view.hpp"
 
+#include "aeris/storage/layer.hpp"
+
 #include <QDateTime>
 #include <QDir>
 #include <QDockWidget>
@@ -13,6 +15,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -37,6 +40,18 @@ namespace {
     return QStringLiteral("starter-world-draft-%1.%2.aeris")
         .arg(storage::kDraftFormatMajor)
         .arg(storage::kDraftFormatMinor);
+}
+
+[[nodiscard]] bool has_surface_classification_layer(
+    const ProjectModel& model
+) noexcept {
+    return std::any_of(
+        model.layers.begin(),
+        model.layers.end(),
+        [](const storage::ProjectLayerRecord& layer) {
+            return layer.role_id == storage::kLayerRolePhysicalSurfaceClassificationV1;
+        }
+    );
 }
 
 }  // namespace
@@ -128,13 +143,17 @@ void MainWindow::open_startup_world() {
     }
 
     refresh_project_ui();
-    if (model_ && model_->sources.empty() && !project_->metadata().frozen) {
+    const bool starter_needs_world = model_ && model_->sources.empty();
+    const bool starter_needs_surface_semantics =
+        model_ && !has_surface_classification_layer(*model_);
+    if (!project_->metadata().frozen &&
+        (starter_needs_world || starter_needs_surface_semantics)) {
         install_base_world();
         return;
     }
 
     layers_dock_->show();
-    statusBar()->showMessage(QStringLiteral("Starter political world ready"), 3500);
+    statusBar()->showMessage(QStringLiteral("Starter world ready"), 3500);
 }
 
 }  // namespace aeris::desktop
