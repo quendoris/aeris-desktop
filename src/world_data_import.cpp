@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace aeris::desktop {
 namespace {
@@ -581,6 +582,74 @@ WorldDataImportResult import_natural_earth_110m_world(
         };
     }
     changed = changed || surface_layer.changed;
+
+    // A newly repaired semantic layer is appended by the storage primitive. If
+    // an older project already contains numerical elevation, that would put the
+    // semantic material below the elevation raster and make it visually inert.
+    // Move only the newly-created semantic layer immediately above the first
+    // elevation layer. Every pre-existing layer keeps its relative order; an
+    // already-existing semantic layer is never normalized or moved here.
+    if (surface_layer.changed) {
+        const storage::ProjectLayerListResult listed = storage::list_project_layers(project);
+        if (!listed.ok()) {
+            return {
+                false,
+                changed,
+                "could not inspect layer order after semantic repair: " +
+                    listed.status.diagnostic,
+            };
+        }
+
+        const auto semantic = std::find_if(
+            listed.records.begin(),
+            listed.records.end(),
+            [](const storage::ProjectLayerRecord& layer) {
+                return layer.layer_id == project::kBuiltinSurfaceClassificationLayerId;
+            }
+        );
+        const auto elevation = std::find_if(
+            listed.records.begin(),
+            listed.records.end(),
+            [](const storage::ProjectLayerRecord& layer) {
+                return layer.role_id == storage::kLayerRolePhysicalElevationV1;
+            }
+        );
+        if (semantic == listed.records.end()) {
+            return {false, changed, "new semantic layer disappeared before order repair"};
+        }
+
+        if (elevation != listed.records.end() && semantic->ordinal > elevation->ordinal) {
+            std::vector<std::string> ordered;
+            ordered.reserve(listed.records.size());
+            bool inserted_semantic = false;
+            for (const storage::ProjectLayerRecord& layer : listed.records) {
+                if (layer.layer_id == project::kBuiltinSurfaceClassificationLayerId) {
+                    continue;
+                }
+                if (!inserted_semantic &&
+                    layer.role_id == storage::kLayerRolePhysicalElevationV1) {
+                    ordered.emplace_back(project::kBuiltinSurfaceClassificationLayerId);
+                    inserted_semantic = true;
+                }
+                ordered.push_back(layer.layer_id);
+            }
+            if (!inserted_semantic) {
+                return {false, changed, "elevation layer disappeared during semantic order repair"};
+            }
+
+            const storage::LayerMutationResult reordered =
+                storage::set_layer_order(project, ordered, modified_utc);
+            if (!reordered.ok()) {
+                return {
+                    false,
+                    changed || reordered.changed || reordered.durably_committed,
+                    "could not place repaired semantic layer above elevation: " +
+                        reordered.status.diagnostic,
+                };
+            }
+            changed = changed || reordered.changed;
+        }
+    }
 
     const storage::Status integrity = project.verify_integrity();
     if (!integrity.ok()) {
