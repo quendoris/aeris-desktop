@@ -433,6 +433,40 @@ struct RenderProof final {
     return std::nullopt;
 }
 
+[[nodiscard]] bool role_contains_surface_origin(
+    const aeris::desktop::ProjectModel& model,
+    const aeris::desktop::RenderFrame& frame,
+    const std::string_view role_id
+) {
+    for (const auto& layer : model.layers) {
+        if (!layer.visible || layer.role_id != role_id) continue;
+        for (const auto& binding : layer.sources) {
+            if (binding.slot_id != "geometry" &&
+                role_id == aeris::storage::kLayerRolePhysicalSurfaceClassificationV1) {
+                continue;
+            }
+            const auto scene_it = frame.source_scenes.find(binding.source_id);
+            if (scene_it == frame.source_scenes.end()) continue;
+            for (const auto& feature : scene_it->second.features) {
+                QPainterPath path;
+                path.setFillRule(Qt::OddEvenFill);
+                for (const auto& ring : feature.fill_rings) {
+                    if (ring.size() < 3U) continue;
+                    path.moveTo(ring.front().x, ring.front().y);
+                    for (std::size_t index = 1U; index < ring.size(); ++index) {
+                        path.lineTo(ring[index].x, ring[index].y);
+                    }
+                    path.closeSubpath();
+                }
+                if (!path.isEmpty() && path.contains(QPointF(0.0, 0.0))) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] bool prove_positive_non_land_stays_water_material(
     QApplication& application,
     const std::shared_ptr<const aeris::desktop::ProjectModel>& model,
@@ -462,6 +496,20 @@ struct RenderProof final {
             longitude_deg,
             latitude_deg
         )) {
+        return false;
+    }
+    if (role_contains_surface_origin(
+            *model,
+            frame,
+            aeris::storage::kLayerRolePhysicalLandFillV1
+        ) ||
+        role_contains_surface_origin(
+            *model,
+            frame,
+            aeris::storage::kLayerRolePhysicalSurfaceClassificationV1
+        )) {
+        std::cerr
+            << "positive non-land proof coordinate is covered by durable land/ice semantics\n";
         return false;
     }
 
