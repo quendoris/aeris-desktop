@@ -4,6 +4,7 @@
 #include "map_view.hpp"
 
 #include "aeris/storage/layer.hpp"
+#include "aeris/surface/classification.hpp"
 #include "aeris/view/surface.hpp"
 
 #include <QFontMetricsF>
@@ -125,6 +126,32 @@ constexpr double kDoubleClickZoomFactor = 1.8;
         const auto* text = std::get_if<std::string>(&property.value);
         if (text != nullptr) return *text;
         return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<surface::SurfaceClass> surface_class_property(
+    const source::Feature& feature
+) {
+    const auto id = text_property(feature, surface::kSurfaceClassPropertyKey);
+    if (!id.has_value()) return std::nullopt;
+    return surface::parse_surface_class_id(*id);
+}
+
+[[nodiscard]] std::optional<QColor> surface_class_color(
+    const surface::SurfaceClass value
+) noexcept {
+    switch (value) {
+    case surface::SurfaceClass::unknown:
+        return std::nullopt;
+    case surface::SurfaceClass::water:
+        return QColor(58, 96, 126, 245);
+    case surface::SurfaceClass::land:
+        return QColor(178, 184, 168, 245);
+    case surface::SurfaceClass::grounded_ice:
+        return QColor(229, 234, 235, 248);
+    case surface::SurfaceClass::floating_ice_shelf:
+        return QColor(211, 226, 233, 248);
     }
     return std::nullopt;
 }
@@ -335,6 +362,32 @@ void draw_country_labels(
     painter.restore();
 }
 
+void draw_surface_classification(
+    QPainter& painter,
+    const view::SceneGeometry& scene,
+    const source::Result& source_result
+) {
+    if (!source_result.feature_properties_complete) return;
+
+    painter.save();
+    painter.setPen(Qt::NoPen);
+    for (const view::SceneFeatureGeometry& geometry_feature : scene.features) {
+        const source::Feature* source_feature =
+            find_source_feature(source_result, geometry_feature.stable_id);
+        if (source_feature == nullptr) continue;
+        const auto semantic_class = surface_class_property(*source_feature);
+        if (!semantic_class.has_value()) continue;
+        const auto color = surface_class_color(*semantic_class);
+        if (!color.has_value()) continue;
+
+        const QPainterPath path = fill_path(geometry_feature);
+        if (path.isEmpty()) continue;
+        painter.setBrush(*color);
+        painter.drawPath(path);
+    }
+    painter.restore();
+}
+
 void draw_layer_geometry(
     QPainter& painter,
     const storage::ProjectLayerRecord& layer,
@@ -346,6 +399,10 @@ void draw_layer_geometry(
     const std::string_view role(layer.role_id);
     if (role == storage::kLayerRoleCountryLabelV1) {
         draw_country_labels(painter, scene, source_result);
+        return;
+    }
+    if (role == storage::kLayerRolePhysicalSurfaceClassificationV1) {
+        draw_surface_classification(painter, scene, source_result);
         return;
     }
 
@@ -673,6 +730,10 @@ void MapView::paintEvent(QPaintEvent*) {
                 );
 
                 for (const storage::LayerSourceBinding& binding : layer.sources) {
+                    if (layer.role_id == storage::kLayerRolePhysicalSurfaceClassificationV1 &&
+                        binding.slot_id != "classification") {
+                        continue;
+                    }
                     const auto scene_it = frame_.source_scenes.find(binding.source_id);
                     const auto source_it = model_->sources.find(binding.source_id);
                     if (scene_it == frame_.source_scenes.end() ||

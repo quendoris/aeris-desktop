@@ -7,6 +7,7 @@
 
 #include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
+#include "aeris/surface/classification.hpp"
 #include "aeris/view/scene.hpp"
 #include "aeris/view/surface.hpp"
 
@@ -23,6 +24,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -30,6 +32,7 @@ namespace {
 
 constexpr double kProofCutDeg = 37.0;
 constexpr std::size_t kMinimumChangedPixels = 1000U;
+constexpr std::size_t kMinimumSemanticChangedPixels = 64U;
 constexpr std::size_t kMinimumDetailSamples = 1000U;
 constexpr qint64 kDetailWorkerProofTimeoutMs = 10000;
 
@@ -51,13 +54,15 @@ struct RenderProof final {
 [[nodiscard]] bool build_frame(
     const aeris::desktop::ProjectModel& model,
     const aeris::view::SurfaceMode mode,
-    aeris::desktop::RenderFrame& frame
+    aeris::desktop::RenderFrame& frame,
+    const double camera_longitude_deg = 15.0,
+    const double camera_latitude_deg = 20.0
 ) {
     frame = {};
     frame.request.mode = mode;
     frame.request.quality = aeris::view::SceneQuality::verified;
-    frame.request.camera_longitude_deg = 15.0;
-    frame.request.camera_latitude_deg = 20.0;
+    frame.request.camera_longitude_deg = camera_longitude_deg;
+    frame.request.camera_latitude_deg = camera_latitude_deg;
     frame.request.projection_central_meridian_deg = kProofCutDeg;
 
     for (const auto& entry : model.sources) {
@@ -321,6 +326,128 @@ struct RenderProof final {
     return true;
 }
 
+[[nodiscard]] std::optional<aeris::surface::SurfaceClass> semantic_class(
+    const aeris::source::Feature& feature
+) {
+    for (const aeris::source::FeatureProperty& property : feature.properties) {
+        if (property.key != aeris::surface::kSurfaceClassPropertyKey) continue;
+        const auto* value = std::get_if<std::string>(&property.value);
+        if (value == nullptr) return std::nullopt;
+        return aeris::surface::parse_surface_class_id(*value);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool prove_semantic_surface(
+    QApplication& application,
+    const std::shared_ptr<const aeris::desktop::ProjectModel>& model,
+    const std::string& project_uuid,
+    const std::uint64_t revision
+) {
+    auto without_semantic =
+        std::make_shared<aeris::desktop::ProjectModel>(*model);
+    const aeris::storage::ProjectLayerRecord* semantic_layer = nullptr;
+    std::string classification_source_id;
+
+    for (auto& layer : without_semantic->layers) {
+        if (layer.role_id !=
+            aeris::storage::kLayerRolePhysicalSurfaceClassificationV1) {
+            continue;
+        }
+        if (semantic_layer != nullptr) {
+            std::cerr << "proof project contains multiple semantic surface layers\n";
+            return false;
+        }
+        if (!layer.visible) {
+            std::cerr << "semantic surface layer is unexpectedly hidden in proof project\n";
+            return false;
+        }
+        semantic_layer = &layer;
+        for (const auto& binding : layer.sources) {
+            if (binding.slot_id == "classification") {
+                classification_source_id = binding.source_id;
+                break;
+            }
+        }
+        layer.visible = false;
+    }
+
+    if (semantic_layer == nullptr || classification_source_id.empty()) {
+        std::cerr << "proof project lacks the durable semantic surface layer/wiring\n";
+        return false;
+    }
+    const auto source_it = model->sources.find(classification_source_id);
+    if (source_it == model->sources.end() || !source_it->second) {
+        std::cerr << "semantic surface layer references a missing durable source\n";
+        return false;
+    }
+    const aeris::source::Result& classification = *source_it->second;
+    if (!classification.feature_properties_complete || classification.features.empty()) {
+        std::cerr << "semantic source lacks a complete non-empty feature-property channel\n";
+        return false;
+    }
+
+    std::size_t classified_features = 0U;
+    for (const aeris::source::Feature& feature : classification.features) {
+        const auto value = semantic_class(feature);
+        if (!value.has_value() ||
+            *value != aeris::surface::SurfaceClass::floating_ice_shelf) {
+            std::cerr
+                << "semantic source contains a feature without canonical floating_ice_shelf classification\n";
+            return false;
+        }
+        ++classified_features;
+    }
+
+    for (const aeris::view::SurfaceMode mode : {
+             aeris::view::SurfaceMode::globe,
+             aeris::view::SurfaceMode::sinu_mollweide,
+         }) {
+        aeris::desktop::RenderFrame frame{};
+        const double camera_latitude =
+            mode == aeris::view::SurfaceMode::globe ? -75.0 : 20.0;
+        if (!build_frame(*model, mode, frame, 0.0, camera_latitude)) return false;
+
+        const RenderProof with_semantic = render_model(
+            application,
+            model,
+            project_uuid,
+            revision,
+            frame,
+            false
+        );
+        const RenderProof without = render_model(
+            application,
+            without_semantic,
+            project_uuid,
+            revision,
+            frame,
+            false
+        );
+        if (with_semantic.image.isNull() || without.image.isNull()) {
+            std::cerr << "semantic surface proof produced a null image\n";
+            return false;
+        }
+        const std::size_t changed = changed_pixels(
+            with_semantic.image,
+            without.image
+        );
+        if (changed < kMinimumSemanticChangedPixels) {
+            std::cerr
+                << aeris::view::surface_mode_name(mode)
+                << " semantic classification changed only " << changed
+                << " pixels; durable material channel appears disconnected\n";
+            return false;
+        }
+        std::cout
+            << aeris::view::surface_mode_name(mode)
+            << " semantic surface: PASS classified_features="
+            << classified_features
+            << " changed_pixels=" << changed << '\n';
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -376,12 +503,18 @@ int main(int argc, char** argv) {
             metadata.project_uuid,
             metadata.revision,
             aeris::view::SurfaceMode::sinu_mollweide
+        ) ||
+        !prove_semantic_surface(
+            application,
+            loaded.model,
+            metadata.project_uuid,
+            metadata.revision
         )) {
         return EXIT_FAILURE;
     }
 
     std::cout
         << "aeris-desktop-elevation-render-probe: PASS "
-        << "overview + I/O-free first paint + bounded async detail change durable Globe and Sinu-Mollweide pixels\n";
+        << "numerical elevation + durable semantic material channel change Globe and Sinu-Mollweide pixels from .aeris only\n";
     return EXIT_SUCCESS;
 }
