@@ -19,6 +19,8 @@
 #include <QPainter>
 #include <QThread>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
