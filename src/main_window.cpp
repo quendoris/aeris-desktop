@@ -702,7 +702,7 @@ void MainWindow::import_world_data() {
 
     const QString selected = QFileDialog::getExistingDirectory(
         this,
-        QStringLiteral("Select local Natural Earth v5.1.2 110m snapshot")
+        QStringLiteral("Select local AERIS Natural Earth v5.1.2 world snapshot")
     );
     if (selected.isEmpty()) return;
 

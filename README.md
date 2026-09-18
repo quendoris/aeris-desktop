@@ -26,7 +26,7 @@ On Arch Linux the required packages are available as:
 sudo pacman -S --needed base-devel cmake qt6-base sqlite libtiff git curl
 ```
 
-Then clone/update the two sibling repositories and select the current Desktop development branch plus the exact core revision pinned by Desktop CI:
+Then clone/update the two sibling repositories. Desktop `main` is the product integration branch; the exact Core revision below is the dependency currently pinned by Desktop CI:
 
 ```bash
 mkdir -p ~/src/aeris
@@ -36,10 +36,10 @@ git clone https://github.com/quendoris/aeris-core.git
 git clone https://github.com/quendoris/aeris-desktop.git
 
 git -C aeris-core fetch origin
-git -C aeris-core checkout 533b5af0ed8d641c2517136009bd20e298d636c4
+git -C aeris-core checkout 6f6ea1fca63919f0fd2d797be562307f37cc11a2
 
 git -C aeris-desktop fetch origin
-git -C aeris-desktop checkout agent/desktop-foundation-v0
+git -C aeris-desktop checkout main
 git -C aeris-desktop pull --ff-only
 
 cd aeris-desktop
@@ -65,7 +65,7 @@ cmake \
   demo.aeris
 ```
 
-`demo.aeris` contains the durable canonical land + admin0 sources and the built-in five-layer world stack. After it is created, the acquisition directory may be removed; opening/rendering the project must not need the original SHP/DBF files.
+`demo.aeris` contains three durable canonical sources: Natural Earth land, admin0 cartography, and 50m Antarctic ice-shelf surface classification. The built-in world stack therefore contains six layers, including the semantic surface layer. After the project is created, the acquisition directory may be removed; opening/rendering must not need the original SHP/DBF/PRJ files.
 
 ```bash
 rm -rf dev-data/natural-earth-v5.1.2
@@ -118,7 +118,7 @@ At whole-world scale the renderer uses the overview. At roughly `3x` zoom and ab
 - Wheel zoom immediately transforms the last valid vector frame, so a new generation never needs to blank the map.
 - High-zoom elevation detail loads asynchronously while overview terrain remains visible.
 - Sinu-Mollweide, Mollweide and Sinusoidal live under `Tools -> Unfold / projection`; flat views support panning and cursor-anchored wheel zoom.
-- Physical/political presentation is layer composition, not an application mode switch; political geometry remains above terrain.
+- Physical/political presentation is layer composition, not an application mode switch; semantic surface material, political geometry, and labels remain separate from the numerical elevation channel.
 - Developer Inspector is hidden by default.
 
 ## Manual terrain pass
