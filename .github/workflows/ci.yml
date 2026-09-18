@@ -139,6 +139,20 @@ jobs:
           ${{ runner.temp }}/desktop-demo.png
           ${{ runner.temp }}/desktop-seam.png
 
+      - name: Capture full AERIS window evidence
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          ./build/aeris-desktop \
+            --capture-ui ${{ runner.temp }}/desktop-ui.png \
+            --capture-after-ms 2500 \
+            ${{ runner.temp }}/desktop-demo.aeris
+          test -s ${{ runner.temp }}/desktop-ui.png
+          file ${{ runner.temp }}/desktop-ui.png
+          sha256sum ${{ runner.temp }}/desktop-ui.png
+
       - name: Prove close during durable scene work exits promptly
         shell: bash
         env:
@@ -191,5 +205,6 @@ jobs:
             ${{ runner.temp }}/desktop-demo.aeris
             ${{ runner.temp }}/desktop-demo.png
             ${{ runner.temp }}/desktop-seam.png
+            ${{ runner.temp }}/desktop-ui.png
           if-no-files-found: error
           retention-days: 14
