@@ -35,15 +35,6 @@ constexpr std::int64_t kWestMicroarcsec =
 constexpr std::int64_t kNorthMicroarcsec =
     90LL * kMicroarcsecondsPerDegree;
 
-// Rasterization still happens synchronously in paintEvent in this CPU renderer.
-// Keep that work bounded independently of window size/zoom so navigation and
-// close/input events are not starved by hundreds of thousands of inverse
-// projection + terrain-style samples. Detail is more expensive per sample due
-// to numerical hillshade, so it gets the tighter budget. A later GPU/off-thread
-// renderer can raise presentation quality without weakening this UI contract.
-constexpr std::int64_t kOverviewRasterSampleBudget = 65536LL;
-constexpr std::int64_t kDetailRasterSampleBudget = 32768LL;
-
 struct Rgb final {
     double r{0.0};
     double g{0.0};
@@ -270,6 +261,7 @@ struct DetailGrid final {
     const RenderFrame& frame,
     const double zoom,
     const QPointF pan,
+    const bool interactive_quality,
     const QRect viewport
 ) noexcept {
     return cache.model == &model &&
@@ -280,6 +272,7 @@ struct DetailGrid final {
         cache.projection_central_meridian_deg ==
             frame.request.projection_central_meridian_deg &&
         cache.zoom == zoom && cache.pan == pan &&
+        cache.interactive_quality == interactive_quality &&
         cache.width == viewport.width() && cache.height == viewport.height() &&
         !cache.image.isNull();
 }
@@ -648,10 +641,12 @@ void rebuild_cache(
     const EmbeddedProjectResource& resource,
     const double zoom,
     const QPointF pan,
+    const bool interactive_quality,
     ElevationSurfaceCache& cache
 ) {
     const QRect viewport = painter.viewport();
     cache.detail_samples_used = 0U;
+    cache.raster_samples_used = 0U;
     cache.detail_pending_resources.clear();
     cache.detail_lod_active = false;
     if (viewport.width() <= 0 || viewport.height() <= 0) {
@@ -678,9 +673,15 @@ void rebuild_cache(
     int block = use_detail
         ? (zoom >= 8.0 ? 1 : 2)
         : (zoom >= 3.0 ? 2 : 4);
-    const std::int64_t sample_budget = use_detail
-        ? kDetailRasterSampleBudget
-        : kOverviewRasterSampleBudget;
+    const std::int64_t sample_budget = static_cast<std::int64_t>(
+        interactive_quality
+            ? (use_detail
+                ? kElevationInteractiveDetailRasterSampleBudget
+                : kElevationInteractiveOverviewRasterSampleBudget)
+            : (use_detail
+                ? kElevationFinalDetailRasterSampleBudget
+                : kElevationFinalOverviewRasterSampleBudget)
+    );
     const auto sample_count_for_block = [&](const int candidate) noexcept {
         const std::int64_t width =
             (static_cast<std::int64_t>(viewport.width()) + candidate - 1LL) /
@@ -696,6 +697,9 @@ void rebuild_cache(
 
     const int sample_width = std::max(1, (viewport.width() + block - 1) / block);
     const int sample_height = std::max(1, (viewport.height() + block - 1) / block);
+    cache.raster_samples_used =
+        static_cast<std::size_t>(sample_width) *
+        static_cast<std::size_t>(sample_height);
     QImage image(sample_width, sample_height, QImage::Format_ARGB32_Premultiplied);
     if (image.isNull()) {
         cache.image = {};
@@ -762,6 +766,7 @@ void rebuild_cache(
         frame.request.projection_central_meridian_deg;
     cache.zoom = zoom;
     cache.pan = pan;
+    cache.interactive_quality = interactive_quality;
     cache.width = viewport.width();
     cache.height = viewport.height();
     cache.image = std::move(image);
@@ -776,6 +781,7 @@ void draw_elevation_overview(
     const ProjectModel& model,
     const double zoom,
     const QPointF pan,
+    const bool interactive_quality,
     ElevationSurfaceCache& cache
 ) {
     if (!layer.visible || layer.role_id != storage::kLayerRolePhysicalElevationV1) return;
@@ -783,8 +789,27 @@ void draw_elevation_overview(
     if (resource == nullptr) return;
 
     const QRect viewport = painter.viewport();
-    if (!cache_matches(cache, model, layer, frame, zoom, pan, viewport)) {
-        rebuild_cache(painter, layer, frame, model, *resource, zoom, pan, cache);
+    if (!cache_matches(
+            cache,
+            model,
+            layer,
+            frame,
+            zoom,
+            pan,
+            interactive_quality,
+            viewport
+        )) {
+        rebuild_cache(
+            painter,
+            layer,
+            frame,
+            model,
+            *resource,
+            zoom,
+            pan,
+            interactive_quality,
+            cache
+        );
     }
     if (cache.image.isNull()) return;
 

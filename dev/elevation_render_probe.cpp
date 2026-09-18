@@ -35,6 +35,7 @@ constexpr std::size_t kMinimumChangedPixels = 1000U;
 constexpr std::size_t kMinimumSemanticChangedPixels = 64U;
 constexpr std::size_t kMinimumDetailSamples = 1000U;
 constexpr qint64 kDetailWorkerProofTimeoutMs = 10000;
+constexpr qint64 kTerrainRefineProofTimeoutMs = 1000;
 
 struct RenderProof final {
     QImage image;
@@ -48,6 +49,10 @@ struct RenderProof final {
     std::size_t initial_detail_samples_used{0U};
     std::size_t initial_pending_resources{0U};
     bool initial_loader_busy{false};
+    std::size_t raster_samples_used{0U};
+    std::size_t initial_raster_samples_used{0U};
+    bool interactive_quality{false};
+    bool initial_interactive_quality{false};
     double zoom{1.0};
 };
 
@@ -132,6 +137,8 @@ struct RenderProof final {
     proof.initial_detail_samples_used = view.elevation_detail_samples_used();
     proof.initial_pending_resources = view.elevation_detail_pending_resources();
     proof.initial_loader_busy = view.elevation_detail_loader_busy();
+    proof.initial_raster_samples_used = view.elevation_raster_samples_used();
+    proof.initial_interactive_quality = view.elevation_interactive_quality();
 
     if (detail_zoom && proof.initial_loader_busy) {
         QElapsedTimer timer;
@@ -146,12 +153,26 @@ struct RenderProof final {
         application.processEvents();
     }
 
+    if (detail_zoom && view.elevation_interactive_quality()) {
+        QElapsedTimer refine_timer;
+        refine_timer.start();
+        while (view.elevation_interactive_quality() &&
+               refine_timer.elapsed() < kTerrainRefineProofTimeoutMs) {
+            application.processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1UL);
+        }
+        application.processEvents();
+        proof.image = render_view(view);
+    }
+
     proof.detail_lod_active = view.elevation_detail_lod_active();
     proof.detail_cached_tiles = view.elevation_detail_cached_tiles();
     proof.detail_tile_loads = view.elevation_detail_tile_loads();
     proof.detail_samples_used = view.elevation_detail_samples_used();
     proof.detail_pending_resources = view.elevation_detail_pending_resources();
     proof.detail_loader_busy = view.elevation_detail_loader_busy();
+    proof.raster_samples_used = view.elevation_raster_samples_used();
+    proof.interactive_quality = view.elevation_interactive_quality();
     proof.zoom = view.zoom_factor();
     view.hide();
     application.processEvents();
@@ -270,14 +291,20 @@ struct RenderProof final {
         detail.initial_detail_samples_used != 0U ||
         detail.initial_pending_resources == 0U ||
         detail.initial_pending_resources > aeris::desktop::kElevationDetailCacheTileLimit ||
-        !detail.initial_loader_busy) {
+        !detail.initial_loader_busy ||
+        !detail.initial_interactive_quality ||
+        detail.initial_raster_samples_used == 0U ||
+        detail.initial_raster_samples_used >
+            aeris::desktop::kElevationInteractiveDetailRasterSampleBudget) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
             << " high-zoom paint did not stay I/O-free: initial_loads="
             << detail.initial_detail_tile_loads
             << " initial_samples=" << detail.initial_detail_samples_used
             << " initial_pending=" << detail.initial_pending_resources
-            << " initial_worker=" << detail.initial_loader_busy << '\n';
+            << " initial_worker=" << detail.initial_loader_busy
+            << " initial_interactive=" << detail.initial_interactive_quality
+            << " initial_raster_samples=" << detail.initial_raster_samples_used << '\n';
         return false;
     }
 
@@ -288,7 +315,12 @@ struct RenderProof final {
         detail.detail_tile_loads == 0U ||
         detail.detail_tile_loads > aeris::desktop::kElevationDetailCacheTileLimit ||
         detail.detail_samples_used < kMinimumDetailSamples ||
-        detail.detail_loader_busy) {
+        detail.detail_loader_busy ||
+        detail.interactive_quality ||
+        detail.raster_samples_used == 0U ||
+        detail.raster_samples_used >
+            aeris::desktop::kElevationFinalDetailRasterSampleBudget ||
+        detail.raster_samples_used <= detail.initial_raster_samples_used) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
             << " did not consume a completed bounded async detail batch: active="
@@ -298,7 +330,10 @@ struct RenderProof final {
             << " loads=" << detail.detail_tile_loads
             << " samples=" << detail.detail_samples_used
             << " pending=" << detail.detail_pending_resources
-            << " worker=" << detail.detail_loader_busy << '\n';
+            << " worker=" << detail.detail_loader_busy
+            << " interactive=" << detail.interactive_quality
+            << " raster_samples=" << detail.raster_samples_used
+            << " initial_raster_samples=" << detail.initial_raster_samples_used << '\n';
         return false;
     }
 
@@ -320,6 +355,8 @@ struct RenderProof final {
         << " detail_changed=" << detail_changed
         << " detail_zoom=" << detail.zoom
         << " initial_pending=" << detail.initial_pending_resources
+        << " interactive_samples=" << detail.initial_raster_samples_used
+        << " refined_samples=" << detail.raster_samples_used
         << " cached_tiles=" << detail.detail_cached_tiles
         << " async_tile_loads=" << detail.detail_tile_loads
         << " detail_samples=" << detail.detail_samples_used << '\n';

@@ -34,6 +34,7 @@ constexpr double kWheelZoomBase = 1.18;
 constexpr double kTrackpadPixelsPerStep = 40.0;
 constexpr double kKeyboardZoomFactor = 1.25;
 constexpr double kDoubleClickZoomFactor = 1.8;
+constexpr int kTerrainInteractionRefineDelayMs = 120;
 
 [[nodiscard]] double wrap_longitude(double value) noexcept {
     value = std::fmod(value + 180.0, 360.0);
@@ -468,6 +469,15 @@ MapView::MapView(QWidget* parent)
             );
         }
     );
+    terrain_refine_timer_ = new QTimer(this);
+    terrain_refine_timer_->setSingleShot(true);
+    terrain_refine_timer_->setInterval(kTerrainInteractionRefineDelayMs);
+    connect(
+        terrain_refine_timer_,
+        &QTimer::timeout,
+        this,
+        [this]() { end_interactive_terrain(); }
+    );
     setMinimumSize(720, 480);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -502,6 +512,8 @@ void MapView::set_project(
     std::string project_uuid,
     const std::uint64_t revision
 ) {
+    if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    terrain_interaction_active_ = false;
     elevation_detail_loader_.cancel();
     model_ = std::move(model);
     project_uuid_ = std::move(project_uuid);
@@ -523,6 +535,8 @@ void MapView::set_project_model(
     std::shared_ptr<const ProjectModel> model,
     const std::uint64_t revision
 ) {
+    if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    terrain_interaction_active_ = false;
     elevation_detail_loader_.cancel();
     model_ = std::move(model);
     revision_ = revision;
@@ -534,6 +548,8 @@ void MapView::set_project_model(
 }
 
 void MapView::clear_project() {
+    if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    terrain_interaction_active_ = false;
     elevation_detail_loader_.cancel();
     model_.reset();
     project_uuid_.clear();
@@ -580,6 +596,25 @@ void MapView::set_surface_mode(const view::SurfaceMode mode) {
     update();
 }
 
+void MapView::begin_interactive_terrain() {
+    if (!model_ || model_->sources.empty()) return;
+    terrain_interaction_active_ = true;
+    if (terrain_refine_timer_ != nullptr) {
+        terrain_refine_timer_->start(kTerrainInteractionRefineDelayMs);
+    }
+}
+
+void MapView::end_interactive_terrain() {
+    if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    if (!terrain_interaction_active_) return;
+    terrain_interaction_active_ = false;
+
+    // Keep decoded detail tiles; only the projection raster is preview-quality.
+    // Clearing it forces one final-quality rebuild after interaction settles.
+    elevation_surface_cache_.image = {};
+    update();
+}
+
 void MapView::apply_zoom(const double factor, const QPointF& anchor) {
     if (!model_ || model_->sources.empty() ||
         !std::isfinite(factor) || factor <= 0.0) {
@@ -594,6 +629,7 @@ void MapView::apply_zoom(const double factor, const QPointF& anchor) {
     );
     if (new_zoom == old_zoom) return;
 
+    begin_interactive_terrain();
     const QPointF center(
         static_cast<double>(width()) * 0.5,
         static_cast<double>(height()) * 0.5
@@ -620,6 +656,7 @@ void MapView::zoom_out() {
 
 void MapView::reset_viewport() {
     if (!model_ || model_->sources.empty()) return;
+    end_interactive_terrain();
     zoom_ = 1.0;
     viewport_pan_ = {};
     store_active_viewport();
@@ -726,6 +763,7 @@ void MapView::paintEvent(QPaintEvent*) {
                     *model_,
                     zoom_,
                     viewport_pan_,
+                    terrain_interaction_active_,
                     elevation_surface_cache_
                 );
 
@@ -880,6 +918,7 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
 
     const QPoint delta = event->pos() - last_mouse_;
     last_mouse_ = event->pos();
+    begin_interactive_terrain();
     if (mode_ == view::SurfaceMode::globe) {
         const double sensitivity = 0.32 / std::sqrt(std::max(zoom_, 1.0));
         longitude_deg_ = wrap_longitude(
@@ -905,6 +944,7 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
     }
     dragging_ = false;
     unsetCursor();
+    end_interactive_terrain();
     if (mode_ == view::SurfaceMode::globe) {
         request_scene(view::SceneQuality::verified);
     }
