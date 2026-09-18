@@ -5,6 +5,8 @@
 #include "project_model.hpp"
 #include "world_data_import.hpp"
 
+#include "aeris/project/world_layers.hpp"
+#include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
 #include "aeris/storage/resource.hpp"
 #include "aeris/surface/classification.hpp"
@@ -17,13 +19,17 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace {
 
 constexpr std::string_view kTimestamp = "2026-09-05T11:00:00Z";
+constexpr std::string_view kRepairTimestamp = "2026-09-05T11:01:00Z";
 constexpr std::string_view kPoliticalSourceId = "world.admin0.natural-earth-110m";
 constexpr std::string_view kSurfaceSourceId =
     "world.surface.antarctic-ice-shelves-natural-earth-50m";
+constexpr std::string_view kCustomLandName = "User-renamed land layer";
+constexpr std::string_view kLegacyElevationLayerId = "proof.legacy-elevation";
 
 int fail(const int code, const std::string& diagnostic) {
     std::cerr << "aeris_desktop_project_lifecycle_probe: FAIL " << diagnostic << '\n';
@@ -45,6 +51,16 @@ int fail(const int code, const std::string& diagnostic) {
         found = true;
     }
     return found;
+}
+
+[[nodiscard]] const aeris::storage::ProjectLayerRecord* find_layer(
+    const std::vector<aeris::storage::ProjectLayerRecord>& layers,
+    const std::string_view layer_id
+) noexcept {
+    for (const auto& layer : layers) {
+        if (layer.layer_id == layer_id) return &layer;
+    }
+    return nullptr;
 }
 
 }  // namespace
@@ -143,25 +159,157 @@ int main(const int argc, char** argv) {
         return fail(15, "surface-classification layer is missing canonical source bindings");
     }
 
+    // Simulate a pre-semantic application-owned starter that the user has
+    // already customized and that already owns numerical elevation. Repair may
+    // add the missing semantic layer, but must never rebuild or normalize the
+    // existing stack. The new semantic layer must land above existing elevation
+    // so its physical material cannot be hidden by the numerical terrain raster.
+    aeris::storage::LayerStateUpdate user_land_state{};
+    user_land_state.modified_utc = std::string(kRepairTimestamp);
+    user_land_state.name = std::string(kCustomLandName);
+    user_land_state.visible = false;
+    const auto user_state = aeris::storage::update_layer_state(
+        *created.store,
+        aeris::project::kBuiltinPhysicalLandLayerId,
+        user_land_state
+    );
+    if (!user_state.ok() || !user_state.changed) {
+        return fail(16, "could not install user land-layer state before starter repair");
+    }
+
+    const auto removed_surface = aeris::storage::remove_layer(
+        *created.store,
+        aeris::project::kBuiltinSurfaceClassificationLayerId,
+        kRepairTimestamp
+    );
+    if (!removed_surface.ok() || !removed_surface.changed) {
+        return fail(17, "could not simulate a starter project missing surface classification");
+    }
+
+    aeris::storage::LayerCreateRequest legacy_elevation{};
+    legacy_elevation.layer_id = std::string(kLegacyElevationLayerId);
+    legacy_elevation.role_id = std::string(aeris::storage::kLayerRolePhysicalElevationV1);
+    legacy_elevation.name = "Legacy elevation proof";
+    legacy_elevation.visible = true;
+    const auto appended_elevation = aeris::storage::append_layer(
+        *created.store,
+        legacy_elevation,
+        kRepairTimestamp
+    );
+    if (!appended_elevation.ok() || !appended_elevation.changed) {
+        return fail(18, "could not install legacy elevation layer before starter repair");
+    }
+
+    const std::vector<std::string> custom_base_order{
+        std::string(aeris::project::kBuiltinPhysicalLandLayerId),
+        std::string(aeris::project::kBuiltinPoliticalLabelsLayerId),
+        std::string(aeris::project::kBuiltinPoliticalCountriesLayerId),
+        std::string(aeris::project::kBuiltinPhysicalCoastlineLayerId),
+        std::string(aeris::project::kBuiltinPoliticalBordersLayerId),
+    };
+    std::vector<std::string> custom_existing_order = custom_base_order;
+    custom_existing_order.emplace_back(kLegacyElevationLayerId);
+    const auto reordered = aeris::storage::set_layer_order(
+        *created.store,
+        custom_existing_order,
+        kRepairTimestamp
+    );
+    if (!reordered.ok() || !reordered.changed) {
+        return fail(19, "could not install custom pre-existing layer order before starter repair");
+    }
+
+    const auto repaired = aeris::desktop::import_natural_earth_110m_world(
+        *created.store,
+        source_root,
+        kRepairTimestamp
+    );
+    if (!repaired.ok() || !repaired.changed) {
+        return fail(20, "starter semantic repair did not restore the missing durable layer");
+    }
+
+    auto repaired_model = aeris::desktop::load_project_model(*created.store);
+    if (!repaired_model.ok() || !repaired_model.model ||
+        repaired_model.model->layers.size() != 7U ||
+        repaired_model.model->sources.size() != 3U) {
+        return fail(21, "starter semantic repair did not reopen as 7 layers / 3 sources");
+    }
+
+    const auto* repaired_land = find_layer(
+        repaired_model.model->layers,
+        aeris::project::kBuiltinPhysicalLandLayerId
+    );
+    if (repaired_land == nullptr || repaired_land->name != kCustomLandName ||
+        repaired_land->visible) {
+        return fail(22, "starter semantic repair overwrote mutable user land-layer state");
+    }
+
+    std::size_t existing_cursor = 0U;
+    for (const auto& layer : repaired_model.model->layers) {
+        if (layer.layer_id == aeris::project::kBuiltinSurfaceClassificationLayerId) {
+            continue;
+        }
+        if (existing_cursor >= custom_existing_order.size() ||
+            layer.layer_id != custom_existing_order[existing_cursor]) {
+            return fail(23, "starter semantic repair reordered pre-existing user layers");
+        }
+        ++existing_cursor;
+    }
+    if (existing_cursor != custom_existing_order.size()) {
+        return fail(24, "starter semantic repair lost a pre-existing user layer");
+    }
+
+    const auto* repaired_surface = find_layer(
+        repaired_model.model->layers,
+        aeris::project::kBuiltinSurfaceClassificationLayerId
+    );
+    const auto* repaired_elevation = find_layer(
+        repaired_model.model->layers,
+        kLegacyElevationLayerId
+    );
+    if (repaired_surface == nullptr || repaired_elevation == nullptr ||
+        repaired_surface->ordinal + 1U != repaired_elevation->ordinal) {
+        return fail(25, "repaired semantic layer is not immediately above existing elevation");
+    }
+
+    const auto repair_retry = aeris::desktop::import_natural_earth_110m_world(
+        *created.store,
+        source_root,
+        kRepairTimestamp
+    );
+    if (!repair_retry.ok() || repair_retry.changed) {
+        return fail(26, "exact starter semantic repair retry is not idempotent");
+    }
+
+    // Remove the proof-only legacy elevation layer so the downstream elevation
+    // importer still proves its normal production path on this same project.
+    const auto removed_legacy_elevation = aeris::storage::remove_layer(
+        *created.store,
+        kLegacyElevationLayerId,
+        kRepairTimestamp
+    );
+    if (!removed_legacy_elevation.ok() || !removed_legacy_elevation.changed) {
+        return fail(27, "could not remove proof-only legacy elevation layer");
+    }
+
     const auto flags = aeris::desktop::import_country_flag_png_pack(
         *created.store,
         flags_root,
         kTimestamp
     );
     if (!flags.ok()) {
-        return fail(16, "country flag pack import failed: " + flags.diagnostic);
+        return fail(28, "country flag pack import failed: " + flags.diagnostic);
     }
     if (flags.flag_count < 150U || flags.flag_count > 256U) {
-        return fail(17, "country flag importer produced an implausible ISO flag count");
+        return fail(29, "country flag importer produced an implausible ISO flag count");
     }
 
     auto decorated = aeris::desktop::load_project_model(*created.store);
     if (!decorated.ok() || !decorated.model) {
-        return fail(18, "flag-decorated project reload failed: " + decorated.diagnostic);
+        return fail(30, "flag-decorated project reload failed: " + decorated.diagnostic);
     }
     if (decorated.model->layers.size() != 7U || decorated.model->sources.size() != 3U ||
         !decorated.model->resources.empty()) {
-        return fail(19, "flag import did not produce 7 layers / 3 sources / 0 eager PNG resources");
+        return fail(31, "flag import did not produce 7 layers / 3 sources / 0 eager PNG resources");
     }
 
     const aeris::storage::ProjectLayerRecord* flag_layer = nullptr;
@@ -173,7 +321,7 @@ int main(const int argc, char** argv) {
     }
     if (flag_layer == nullptr || flag_layer->sources.size() != 1U ||
         flag_layer->resources.size() != flags.flag_count) {
-        return fail(20, "Country flags layer bindings are incomplete after reopen");
+        return fail(32, "Country flags layer bindings are incomplete after reopen");
     }
 
     // Lazy frontend loading must not weaken durable truth. The .aeris file still
@@ -181,7 +329,7 @@ int main(const int argc, char** argv) {
     // those optional presentation bytes during cold open.
     const auto durable_resources = aeris::storage::list_project_resources(*created.store);
     if (!durable_resources.ok()) {
-        return fail(21, "unable to enumerate durable flag resources: " + durable_resources.status.diagnostic);
+        return fail(33, "unable to enumerate durable flag resources: " + durable_resources.status.diagnostic);
     }
 
     std::size_t embedded_png_flags = 0U;
@@ -190,18 +338,18 @@ int main(const int argc, char** argv) {
         if (record.storage_mode != aeris::storage::ResourceStorageMode::embedded ||
             record.identity.size_bytes == 0U || record.identity.sha256.size() != 64U ||
             record.chunk_count == 0U) {
-            return fail(22, "durable flag resource lost embedded content identity");
+            return fail(34, "durable flag resource lost embedded content identity");
         }
         ++embedded_png_flags;
     }
     if (embedded_png_flags != flags.flag_count ||
         durable_resources.records.size() != flags.flag_count) {
-        return fail(23, "durable .aeris flag resource count differs from imported bindings");
+        return fail(35, "durable .aeris flag resource count differs from imported bindings");
     }
 
     const auto integrity = created.store->verify_integrity();
     if (!integrity.ok()) {
-        return fail(24, "decorated project integrity failed: " + integrity.diagnostic);
+        return fail(36, "decorated project integrity failed: " + integrity.diagnostic);
     }
 
     std::cout
@@ -209,6 +357,8 @@ int main(const int argc, char** argv) {
         << " empty_layers=0 empty_sources=0"
         << " world_layers=6 world_sources=3"
         << " surface_features=" << surface->second->features.size()
+        << " starter_repair_preserved_user_state=1"
+        << " starter_repair_surface_above_elevation=1"
         << " political_palette_classes=" << palette_assignments.size()
         << " decorated_layers=" << decorated.model->layers.size()
         << " embedded_flags=" << embedded_png_flags
