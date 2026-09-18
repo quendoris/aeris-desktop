@@ -17,6 +17,7 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QPainter>
+#include <QPainterPath>
 #include <QThread>
 
 #include <algorithm>
@@ -29,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
