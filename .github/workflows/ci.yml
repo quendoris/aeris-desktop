@@ -148,9 +148,16 @@ jobs:
           set -euo pipefail
           rm -rf "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
           mkdir -p "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          stderr_file="${{ runner.temp }}/starter-shutdown.stderr"
           timeout --signal=KILL 3s \
             ./build/aeris-desktop \
-            --quit-after-ms 150
+            --quit-after-ms 150 \
+            2>"$stderr_file"
+          cat "$stderr_file"
+          if grep -Fq "QProcess: Destroyed while process" "$stderr_file"; then
+            echo "starter shutdown destroyed a live data worker" >&2
+            exit 1
+          fi
 
       - name: Prove durable project and renders exist
         shell: bash
