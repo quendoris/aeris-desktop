@@ -26,7 +26,7 @@ On Arch Linux the required packages are available as:
 sudo pacman -S --needed base-devel cmake qt6-base sqlite libtiff git curl
 ```
 
-Then clone/update the two sibling repositories. Desktop `main` is the product integration branch; the exact Core revision below is the dependency currently pinned by Desktop CI:
+Then clone/update the two sibling repositories. Desktop `main` is the product integration branch; `AERIS_CORE_REVISION` is the single source of truth for the exact Core commit exercised by Desktop CI:
 
 ```bash
 mkdir -p ~/src/aeris
@@ -35,12 +35,12 @@ cd ~/src/aeris
 git clone https://github.com/quendoris/aeris-core.git
 git clone https://github.com/quendoris/aeris-desktop.git
 
-git -C aeris-core fetch origin
-git -C aeris-core checkout 6f6ea1fca63919f0fd2d797be562307f37cc11a2
-
 git -C aeris-desktop fetch origin
 git -C aeris-desktop checkout main
 git -C aeris-desktop pull --ff-only
+
+git -C aeris-core fetch origin
+git -C aeris-core checkout "$(cat aeris-desktop/AERIS_CORE_REVISION)"
 
 cd aeris-desktop
 cmake -S . -B build \
