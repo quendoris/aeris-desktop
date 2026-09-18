@@ -11,6 +11,7 @@
 
 #include <QPoint>
 #include <QPointF>
+#include <QTimer>
 #include <QWidget>
 
 #include <array>
@@ -67,6 +68,8 @@ public:
     // is a control boundary, not another event queued behind background work.
     void prepare_shutdown() {
         scene_request_callback_ = {};
+        if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+        terrain_interaction_active_ = false;
         elevation_detail_loader_.cancel();
         setUpdatesEnabled(false);
     }
@@ -105,6 +108,12 @@ public:
     }
     [[nodiscard]] std::size_t elevation_detail_samples_used() const noexcept {
         return elevation_surface_cache_.detail_samples_used;
+    }
+    [[nodiscard]] std::size_t elevation_raster_samples_used() const noexcept {
+        return elevation_surface_cache_.raster_samples_used;
+    }
+    [[nodiscard]] bool elevation_interactive_quality() const noexcept {
+        return elevation_surface_cache_.interactive_quality;
     }
     [[nodiscard]] std::size_t elevation_detail_pending_resources() const noexcept {
         return elevation_detail_requests(elevation_surface_cache_).size();
@@ -164,6 +173,8 @@ private:
     };
 
     void request_scene(view::SceneQuality quality);
+    void begin_interactive_terrain();
+    void end_interactive_terrain();
     void apply_zoom(double factor, const QPointF& anchor);
     void store_active_viewport() noexcept;
     void restore_active_viewport() noexcept;
@@ -190,6 +201,8 @@ private:
     std::array<ViewportState, 4U> viewports_{};
     ElevationSurfaceCache elevation_surface_cache_{};
     ElevationDetailLoader elevation_detail_loader_;
+    QTimer* terrain_refine_timer_{nullptr};
+    bool terrain_interaction_active_{false};
 
     QPoint last_mouse_{};
     bool dragging_{false};

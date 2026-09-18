@@ -26,6 +26,13 @@ namespace aeris::desktop {
 inline constexpr double kElevationDetailLodZoom = 3.0;
 inline constexpr std::size_t kElevationDetailCacheTileLimit = 16U;
 
+// Final quality keeps the existing bounded CPU raster density. Active
+// navigation uses a much smaller budget and is refined after interaction ends.
+inline constexpr std::size_t kElevationFinalOverviewRasterSampleBudget = 65536U;
+inline constexpr std::size_t kElevationFinalDetailRasterSampleBudget = 32768U;
+inline constexpr std::size_t kElevationInteractiveOverviewRasterSampleBudget = 8192U;
+inline constexpr std::size_t kElevationInteractiveDetailRasterSampleBudget = 4096U;
+
 struct ElevationDetailTileCacheEntry final {
     std::string resource_id;
     elevation::ElevationTile tile;
@@ -58,7 +65,9 @@ struct ElevationSurfaceCache final {
     std::uint64_t detail_render_epoch{0U};
     std::size_t detail_tile_loads{0U};
     std::size_t detail_samples_used{0U};
+    std::size_t raster_samples_used{0U};
     bool detail_lod_active{false};
+    bool interactive_quality{false};
 };
 
 // Reprojects durable numerical elevation into the exact surface currently
@@ -72,6 +81,7 @@ void draw_elevation_overview(
     const ProjectModel& model,
     double zoom,
     QPointF pan,
+    bool interactive_quality,
     ElevationSurfaceCache& cache);
 
 [[nodiscard]] const std::vector<std::string>& elevation_detail_requests(
