@@ -14,6 +14,8 @@
 namespace aeris::desktop {
 namespace {
 
+constexpr int kShutdownReapTimeoutMs = 250;
+
 [[nodiscard]] QString path_to_qt(const std::filesystem::path& path) {
     const std::string utf8 = path.generic_u8string();
     return QDir::fromNativeSeparators(
@@ -113,10 +115,12 @@ DataJobProcess::~DataJobProcess() {
     completed_ = true;
     if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
         // QProcess::kill maps to an unconditional process kill on supported
-        // desktop platforms. No graceful worker shutdown is awaited here: the
-        // GUI close contract takes precedence, while SQLite/storage recovery is
-        // verified separately at the durable project boundary.
+        // desktop platforms. Do not wait for the job's work to complete: only
+        // reap the already-killed child for a short bounded interval so QObject
+        // teardown never inherits a live QProcess. Durable SQLite recovery is
+        // verified separately at the project boundary.
         process_->kill();
+        (void)process_->waitForFinished(kShutdownReapTimeoutMs);
     }
 }
 
