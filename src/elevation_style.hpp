@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #pragma once
 
-#include <QtGlobal>
+#include <QColor>
 
 #include <algorithm>
 #include <cmath>
