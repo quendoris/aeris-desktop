@@ -34,6 +34,23 @@ int main(int argc, char** argv) {
         QStringLiteral("milliseconds")
     );
     parser.addOption(quit_after_option);
+    const QCommandLineOption capture_ui_option(
+        QStringLiteral("capture-ui"),
+        QStringLiteral(
+            "Capture the complete AERIS MainWindow into a PNG after the UI has settled, then exit. Intended for visual CI evidence."
+        ),
+        QStringLiteral("png")
+    );
+    const QCommandLineOption capture_after_option(
+        QStringLiteral("capture-after-ms"),
+        QStringLiteral(
+            "Delay before --capture-ui grabs the MainWindow."
+        ),
+        QStringLiteral("milliseconds"),
+        QStringLiteral("1500")
+    );
+    parser.addOption(capture_ui_option);
+    parser.addOption(capture_after_option);
     parser.process(application);
 
     const QStringList positional = parser.positionalArguments();
@@ -53,6 +70,26 @@ int main(int argc, char** argv) {
     }
 
     window.show();
+
+    if (parser.isSet(capture_ui_option)) {
+        if (parser.isSet(quit_after_option)) return 2;
+        bool ok = false;
+        const int delay_ms = parser.value(capture_after_option).toInt(&ok);
+        const QString output_path = parser.value(capture_ui_option);
+        if (!ok || delay_ms < 0 || output_path.isEmpty()) return 2;
+        QTimer::singleShot(
+            delay_ms,
+            &window,
+            [&application, &window, output_path]() {
+                const auto pixmap = window.grab();
+                if (pixmap.isNull() || !pixmap.save(output_path, "PNG")) {
+                    application.exit(3);
+                    return;
+                }
+                window.close();
+            }
+        );
+    }
 
     if (parser.isSet(quit_after_option)) {
         bool ok = false;
