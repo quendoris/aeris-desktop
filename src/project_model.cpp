@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "project_model.hpp"
+#include "elevation_style.hpp"
 
 #include "aeris/geo/wgs84.hpp"
 #include "aeris/project/source_reader.hpp"
@@ -20,12 +21,6 @@
 
 namespace aeris::desktop {
 namespace {
-
-struct Rgb final {
-    double r{0.0};
-    double g{0.0};
-    double b{0.0};
-};
 
 [[nodiscard]] bool eager_resource_binding(
     const storage::ProjectLayerRecord& layer,
@@ -67,66 +62,6 @@ struct Rgb final {
     width = be32(16U);
     height = be32(20U);
     return width > 0U && height > 0U;
-}
-
-[[nodiscard]] Rgb mix(const Rgb a, const Rgb b, const double t) noexcept {
-    const double clamped = std::clamp(t, 0.0, 1.0);
-    return {
-        a.r + (b.r - a.r) * clamped,
-        a.g + (b.g - a.g) * clamped,
-        a.b + (b.b - a.b) * clamped,
-    };
-}
-
-[[nodiscard]] Rgb hypsometric_color(const double elevation_m) noexcept {
-    if (elevation_m < -6000.0) return {18.0, 34.0, 66.0};
-    if (elevation_m < -1000.0) {
-        return mix(
-            {18.0, 34.0, 66.0},
-            {42.0, 78.0, 111.0},
-            (elevation_m + 6000.0) / 5000.0
-        );
-    }
-    if (elevation_m < 0.0) {
-        return mix(
-            {42.0, 78.0, 111.0},
-            {67.0, 111.0, 137.0},
-            (elevation_m + 1000.0) / 1000.0
-        );
-    }
-    if (elevation_m < 500.0) {
-        return mix(
-            {83.0, 119.0, 83.0},
-            {111.0, 133.0, 87.0},
-            elevation_m / 500.0
-        );
-    }
-    if (elevation_m < 1500.0) {
-        return mix(
-            {111.0, 133.0, 87.0},
-            {149.0, 130.0, 96.0},
-            (elevation_m - 500.0) / 1000.0
-        );
-    }
-    if (elevation_m < 3000.0) {
-        return mix(
-            {149.0, 130.0, 96.0},
-            {166.0, 149.0, 128.0},
-            (elevation_m - 1500.0) / 1500.0
-        );
-    }
-    if (elevation_m < 5000.0) {
-        return mix(
-            {166.0, 149.0, 128.0},
-            {203.0, 199.0, 190.0},
-            (elevation_m - 3000.0) / 2000.0
-        );
-    }
-    return mix(
-        {203.0, 199.0, 190.0},
-        {239.0, 239.0, 237.0},
-        (elevation_m - 5000.0) / 3500.0
-    );
 }
 
 [[nodiscard]] QImage build_elevation_preview(
@@ -222,23 +157,7 @@ struct Rgb final {
                 }
             }
 
-            const double shade = std::clamp(
-                0.62 + 0.58 * std::max(0.0, illumination),
-                0.62,
-                1.20
-            );
-            const Rgb base = hypsometric_color(*center);
-            const auto channel = [&](const double value) noexcept {
-                return static_cast<int>(
-                    std::lround(std::clamp(value * shade, 0.0, 255.0))
-                );
-            };
-            pixels[x] = qRgba(
-                channel(base.r),
-                channel(base.g),
-                channel(base.b),
-                255
-            );
+            pixels[x] = neutral_elevation_relief_pixel(illumination);
         }
     }
     return image;

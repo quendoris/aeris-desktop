@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "elevation_renderer.hpp"
+#include "elevation_style.hpp"
 #include "map_view.hpp"
 #include "project_model.hpp"
 
@@ -16,8 +17,11 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QPainter>
+#include <QPainterPath>
 #include <QThread>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -375,6 +380,191 @@ struct RenderProof final {
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::int16_t> overview_elevation_at(
+    const aeris::desktop::ProjectModel& model,
+    const double longitude_deg,
+    const double latitude_deg
+) {
+    for (const auto& layer : model.layers) {
+        if (layer.role_id != aeris::storage::kLayerRolePhysicalElevationV1) continue;
+        for (const auto& binding : layer.resources) {
+            if (binding.slot_id.rfind("overview:", 0U) != 0U) continue;
+            const auto resource_it = model.resources.find(binding.resource_id);
+            if (resource_it == model.resources.end() || !resource_it->second ||
+                !resource_it->second->elevation_tile.has_value()) {
+                continue;
+            }
+            const auto& tile = *resource_it->second->elevation_tile;
+            constexpr double microarcsec_per_degree = 3600.0 * 1000000.0;
+            const double west =
+                static_cast<double>(tile.west_microarcsec) / microarcsec_per_degree;
+            const double north =
+                static_cast<double>(tile.north_microarcsec) / microarcsec_per_degree;
+            const double lon_step =
+                static_cast<double>(tile.longitude_step_microarcsec) /
+                microarcsec_per_degree;
+            const double lat_step =
+                static_cast<double>(tile.latitude_step_microarcsec) /
+                microarcsec_per_degree;
+            if (!(lon_step > 0.0) || !(lat_step > 0.0) ||
+                tile.width == 0U || tile.height == 0U) {
+                continue;
+            }
+
+            const double raw_x = (longitude_deg - west) / lon_step - 0.5;
+            const double raw_y = (north - latitude_deg) / lat_step - 0.5;
+            if (raw_x < -0.5 || raw_y < -0.5 ||
+                raw_x > static_cast<double>(tile.width) - 0.5 ||
+                raw_y > static_cast<double>(tile.height) - 0.5) {
+                continue;
+            }
+            const auto x = static_cast<std::uint32_t>(std::lround(std::clamp(
+                raw_x, 0.0, static_cast<double>(tile.width - 1U)
+            )));
+            const auto y = static_cast<std::uint32_t>(std::lround(std::clamp(
+                raw_y, 0.0, static_cast<double>(tile.height - 1U)
+            )));
+            const std::int16_t sample = tile.samples_m[
+                static_cast<std::size_t>(y) * static_cast<std::size_t>(tile.width) +
+                static_cast<std::size_t>(x)
+            ];
+            if (sample == aeris::elevation::kNoDataMeters) return std::nullopt;
+            return sample;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool role_contains_surface_origin(
+    const aeris::desktop::ProjectModel& model,
+    const aeris::desktop::RenderFrame& frame,
+    const std::string_view role_id
+) {
+    for (const auto& layer : model.layers) {
+        if (!layer.visible || layer.role_id != role_id) continue;
+        for (const auto& binding : layer.sources) {
+            if (binding.slot_id != "geometry" &&
+                role_id == aeris::storage::kLayerRolePhysicalSurfaceClassificationV1) {
+                continue;
+            }
+            const auto scene_it = frame.source_scenes.find(binding.source_id);
+            if (scene_it == frame.source_scenes.end()) continue;
+            for (const auto& feature : scene_it->second.features) {
+                QPainterPath path;
+                path.setFillRule(Qt::OddEvenFill);
+                for (const auto& ring : feature.fill_rings) {
+                    if (ring.size() < 3U) continue;
+                    path.moveTo(ring.front().x, ring.front().y);
+                    for (std::size_t index = 1U; index < ring.size(); ++index) {
+                        path.lineTo(ring[index].x, ring[index].y);
+                    }
+                    path.closeSubpath();
+                }
+                if (!path.isEmpty() && path.contains(QPointF(0.0, 0.0))) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool prove_positive_non_land_stays_water_material(
+    QApplication& application,
+    const std::shared_ptr<const aeris::desktop::ProjectModel>& model,
+    const std::shared_ptr<const aeris::desktop::ProjectModel>& without_elevation,
+    const std::string& project_uuid,
+    const std::uint64_t revision
+) {
+    // This point is deliberately in the open Southern Ocean and lands exactly
+    // on a deterministic 15-degree overview cell center. The CI elevation
+    // fixture has a positive numerical sample here. Positive height must not
+    // manufacture ordinary-land hue.
+    constexpr double longitude_deg = 157.5;
+    constexpr double latitude_deg = -52.5;
+    const auto sample = overview_elevation_at(*model, longitude_deg, latitude_deg);
+    if (!sample.has_value() || *sample <= 0) {
+        std::cerr
+            << "positive non-land proof expected a positive overview elevation at "
+            << longitude_deg << "," << latitude_deg << "\n";
+        return false;
+    }
+
+    aeris::desktop::RenderFrame frame{};
+    if (!build_frame(
+            *model,
+            aeris::view::SurfaceMode::globe,
+            frame,
+            longitude_deg,
+            latitude_deg
+        )) {
+        return false;
+    }
+    if (role_contains_surface_origin(
+            *model,
+            frame,
+            aeris::storage::kLayerRolePhysicalLandFillV1
+        ) ||
+        role_contains_surface_origin(
+            *model,
+            frame,
+            aeris::storage::kLayerRolePhysicalSurfaceClassificationV1
+        )) {
+        std::cerr
+            << "positive non-land proof coordinate is covered by durable land/ice semantics\n";
+        return false;
+    }
+
+    const RenderProof with_relief = render_model(
+        application, model, project_uuid, revision, frame, false
+    );
+    const RenderProof without_relief = render_model(
+        application, without_elevation, project_uuid, revision, frame, false
+    );
+    if (with_relief.image.isNull() || without_relief.image.isNull()) {
+        std::cerr << "positive non-land material proof produced a null image\n";
+        return false;
+    }
+
+    const QPoint center(
+        with_relief.image.width() / 2,
+        with_relief.image.height() / 2
+    );
+    const QRgb styled = with_relief.image.pixel(center);
+    const QRgb base = without_relief.image.pixel(center);
+    if (styled == base) {
+        std::cerr << "positive non-land proof did not receive numerical relief\n";
+        return false;
+    }
+    if (!(qBlue(styled) > qGreen(styled) && qGreen(styled) > qRed(styled))) {
+        std::cerr
+            << "positive non-land elevation changed water into a non-water hue: rgb="
+            << qRed(styled) << ',' << qGreen(styled) << ',' << qBlue(styled)
+            << " elevation=" << *sample << "\n";
+        return false;
+    }
+
+    // Unit-level guard for both overview and detail paths: the elevation style
+    // can only emit neutral grayscale. Material hue necessarily comes from the
+    // already-rendered durable surface beneath the Multiply composition.
+    for (const double illumination : {-1.0, 0.0, 0.5, 1.0, 2.0}) {
+        const QRgb relief =
+            aeris::desktop::neutral_elevation_relief_pixel(illumination);
+        if (qAlpha(relief) != 255 ||
+            qRed(relief) != qGreen(relief) ||
+            qGreen(relief) != qBlue(relief)) {
+            std::cerr << "numerical elevation relief unexpectedly contains material hue\n";
+            return false;
+        }
+    }
+
+    std::cout
+        << "positive non-land material: PASS elevation=" << *sample
+        << " rgb=" << qRed(styled) << ',' << qGreen(styled) << ',' << qBlue(styled)
+        << "\n";
+    return true;
+}
+
 [[nodiscard]] bool prove_semantic_surface(
     QApplication& application,
     const std::shared_ptr<const aeris::desktop::ProjectModel>& model,
@@ -546,12 +736,19 @@ int main(int argc, char** argv) {
             loaded.model,
             metadata.project_uuid,
             metadata.revision
+        ) ||
+        !prove_positive_non_land_stays_water_material(
+            application,
+            loaded.model,
+            without_elevation,
+            metadata.project_uuid,
+            metadata.revision
         )) {
         return EXIT_FAILURE;
     }
 
     std::cout
         << "aeris-desktop-elevation-render-probe: PASS "
-        << "numerical elevation + durable semantic material channel change Globe and Sinu-Mollweide pixels from .aeris only\n";
+        << "numerical relief + durable semantic materials change Globe/Sinu-Mollweide pixels without elevation-sign material inference\n";
     return EXIT_SUCCESS;
 }
