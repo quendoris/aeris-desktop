@@ -150,12 +150,16 @@ protected:
     [[nodiscard]] const RenderFrame* current_render_frame() const noexcept {
         return has_current_frame() ? &frame_ : nullptr;
     }
-    // Rebuildable workspace caches must key themselves by durable revision as
-    // well as project path. The same .aeris path can receive acknowledged
-    // resource mutations while remaining open, and presentation state from an
-    // older revision must not survive that boundary.
+    // Workspace caches that contain derived geometry must still use revision
+    // where their inputs can change. Content-addressed resource caches may use
+    // project UUID/path instead: a resource ID's content identity is immutable
+    // inside one AERIS project, while visibility/name/order revisions do not
+    // change those bytes.
     [[nodiscard]] std::uint64_t current_project_revision() const noexcept {
         return revision_;
+    }
+    [[nodiscard]] const std::string& current_project_uuid() const noexcept {
+        return project_uuid_;
     }
 
     void paintEvent(QPaintEvent* event) override;

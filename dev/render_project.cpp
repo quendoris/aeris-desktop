@@ -5,14 +5,17 @@
 #include "project_model.hpp"
 
 #include "aeris/geo/wgs84.hpp"
+#include "aeris/storage/layer.hpp"
 #include "aeris/storage/project.hpp"
 #include "aeris/view/scene.hpp"
 #include "aeris/view/surface.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QThread>
 #include <QTransform>
 #include <QWheelEvent>
 
@@ -116,6 +119,35 @@ constexpr int kMapMarginPx = 24;
         << frame.source_scenes.size() << " sources, cut "
         << cut_deg << " deg)\n";
     return true;
+}
+
+[[nodiscard]] bool wait_for_lazy_flags(
+    QApplication& application,
+    aeris::desktop::MapWorkspaceView& view
+) {
+    constexpr qint64 timeout_ms = 5000;
+    QElapsedTimer timer;
+    timer.start();
+
+    std::size_t previous_count = 0U;
+    int stable_passes = 0;
+    while (timer.elapsed() < timeout_ms) {
+        (void)render_view(view);
+        application.processEvents();
+        if (!view.flag_resource_loader_busy() && view.flag_cached_images() > 0U) {
+            if (view.flag_cached_images() == previous_count) {
+                ++stable_passes;
+            } else {
+                previous_count = view.flag_cached_images();
+                stable_passes = 0;
+            }
+            if (stable_passes >= 2) return true;
+        } else {
+            stable_passes = 0;
+        }
+        QThread::msleep(2UL);
+    }
+    return false;
 }
 
 [[nodiscard]] bool nearly_equal(const QPointF& left, const QPointF& right) noexcept {
@@ -355,6 +387,53 @@ int main(int argc, char** argv) {
         std::cerr << "clean Globe render produced a null image\n";
         return EXIT_FAILURE;
     }
+
+    // Country-flag PNGs are lazy durable resources. Once decoded for this
+    // immutable project identity, an unrelated presentation-only revision must
+    // not throw them away and re-read SQLite merely because revision advanced.
+    if (!wait_for_lazy_flags(application, view)) {
+        std::cerr << "lazy flag cache did not become resident for stability proof\n";
+        return EXIT_FAILURE;
+    }
+    const std::size_t flag_cache_before_revision = view.flag_cached_images();
+    auto presentation_model =
+        std::make_shared<aeris::desktop::ProjectModel>(*model_result.model);
+    bool changed_presentation = false;
+    for (auto& layer : presentation_model->layers) {
+        if (layer.role_id == aeris::storage::kLayerRoleCountryFlagV1) continue;
+        layer.visible = !layer.visible;
+        changed_presentation = true;
+        break;
+    }
+    if (!changed_presentation) {
+        std::cerr << "no non-flag layer available for presentation revision proof\n";
+        return EXIT_FAILURE;
+    }
+    view.set_presentation_model(
+        presentation_model,
+        opened.store->metadata().revision + 1U
+    );
+    const QImage presentation_revision = render_view(view);
+    if (presentation_revision.isNull() ||
+        view.flag_cached_images() != flag_cache_before_revision ||
+        view.flag_resource_loader_busy()) {
+        std::cerr
+            << "presentation-only project revision invalidated lazy flag cache: before="
+            << flag_cache_before_revision
+            << " after=" << view.flag_cached_images()
+            << " loader=" << view.flag_resource_loader_busy() << '\n';
+        return EXIT_FAILURE;
+    }
+    std::cout
+        << "flag presentation revision cache: PASS cached_images="
+        << flag_cache_before_revision << '\n';
+
+    // Restore the exact durable model for the remaining projection interaction
+    // proof without changing project identity.
+    view.set_presentation_model(
+        model_result.model,
+        opened.store->metadata().revision
+    );
 
     view.set_unfold_target_mode(aeris::view::SurfaceMode::sinu_mollweide);
     view.set_unfold_tool_active(true);
