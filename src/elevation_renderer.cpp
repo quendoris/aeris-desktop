@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "elevation_renderer.hpp"
+#include "elevation_style.hpp"
 
 #include "aeris/elevation/grid.hpp"
 #include "aeris/geo/wgs84.hpp"
@@ -35,12 +36,6 @@ constexpr std::int64_t kWestMicroarcsec =
 constexpr std::int64_t kNorthMicroarcsec =
     90LL * kMicroarcsecondsPerDegree;
 
-struct Rgb final {
-    double r{0.0};
-    double g{0.0};
-    double b{0.0};
-};
-
 struct ParsedDetailBinding final {
     const storage::LayerResourceBinding* binding{nullptr};
     std::uint32_t resolution_arcsec{0U};
@@ -57,66 +52,6 @@ struct DetailGrid final {
     std::int64_t tile_latitude_span_microarcsec{0LL};
     std::vector<const storage::LayerResourceBinding*> bindings;
 };
-
-[[nodiscard]] Rgb mix(const Rgb a, const Rgb b, const double t) noexcept {
-    const double clamped = std::clamp(t, 0.0, 1.0);
-    return {
-        a.r + (b.r - a.r) * clamped,
-        a.g + (b.g - a.g) * clamped,
-        a.b + (b.b - a.b) * clamped,
-    };
-}
-
-[[nodiscard]] Rgb hypsometric_color(const double elevation_m) noexcept {
-    if (elevation_m < -6000.0) return {18.0, 34.0, 66.0};
-    if (elevation_m < -1000.0) {
-        return mix(
-            {18.0, 34.0, 66.0},
-            {42.0, 78.0, 111.0},
-            (elevation_m + 6000.0) / 5000.0
-        );
-    }
-    if (elevation_m < 0.0) {
-        return mix(
-            {42.0, 78.0, 111.0},
-            {67.0, 111.0, 137.0},
-            (elevation_m + 1000.0) / 1000.0
-        );
-    }
-    if (elevation_m < 500.0) {
-        return mix(
-            {83.0, 119.0, 83.0},
-            {111.0, 133.0, 87.0},
-            elevation_m / 500.0
-        );
-    }
-    if (elevation_m < 1500.0) {
-        return mix(
-            {111.0, 133.0, 87.0},
-            {149.0, 130.0, 96.0},
-            (elevation_m - 500.0) / 1000.0
-        );
-    }
-    if (elevation_m < 3000.0) {
-        return mix(
-            {149.0, 130.0, 96.0},
-            {166.0, 149.0, 128.0},
-            (elevation_m - 1500.0) / 1500.0
-        );
-    }
-    if (elevation_m < 5000.0) {
-        return mix(
-            {166.0, 149.0, 128.0},
-            {203.0, 199.0, 190.0},
-            (elevation_m - 3000.0) / 2000.0
-        );
-    }
-    return mix(
-        {203.0, 199.0, 190.0},
-        {239.0, 239.0, 237.0},
-        (elevation_m - 5000.0) / 3500.0
-    );
-}
 
 [[nodiscard]] bool parse_uint32(
     const std::string_view text,
@@ -551,23 +486,7 @@ void record_missing_detail(
         }
     }
 
-    const double shade = std::clamp(
-        0.62 + 0.58 * std::max(0.0, illumination),
-        0.62,
-        1.20
-    );
-    const Rgb base = hypsometric_color(*center);
-    const auto channel = [&](const double value) noexcept {
-        return static_cast<int>(
-            std::lround(std::clamp(value * shade, 0.0, 255.0))
-        );
-    };
-    return qRgba(
-        channel(base.r),
-        channel(base.g),
-        channel(base.b),
-        255
-    );
+    return neutral_elevation_relief_pixel(illumination);
 }
 
 [[nodiscard]] std::optional<QRgb> geographic_detail_pixel(
@@ -816,6 +735,10 @@ void draw_elevation_overview(
     painter.save();
     painter.resetTransform();
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // Elevation is a numerical relief channel, not a material classifier.
+    // Multiply preserves the hue selected by durable land/water/ice semantics
+    // while the neutral grayscale raster contributes only hillshade.
+    painter.setCompositionMode(QPainter::CompositionMode_Multiply);
     painter.drawImage(QRectF(viewport), cache.image);
     painter.restore();
 }
