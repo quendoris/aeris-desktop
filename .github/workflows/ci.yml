@@ -24,18 +24,30 @@ jobs:
       - name: Checkout desktop
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Resolve exact AERIS core revision
+        id: core-revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(tr -d '\r\n' < AERIS_CORE_REVISION)"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "AERIS_CORE_REVISION must contain one lowercase 40-hex commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout exact AERIS core
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: quendoris/aeris-core
-          ref: 6f6ea1fca63919f0fd2d797be562307f37cc11a2
+          ref: ${{ steps.core-revision.outputs.sha }}
           path: aeris-core
 
       - name: Record exact core dependency
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C aeris-core rev-parse HEAD)" = "6f6ea1fca63919f0fd2d797be562307f37cc11a2"
+          test "$(git -C aeris-core rev-parse HEAD)" = "${{ steps.core-revision.outputs.sha }}"
           git -C aeris-core log -1 --format='AERIS core: %H %s'
 
       - name: Install dependencies
