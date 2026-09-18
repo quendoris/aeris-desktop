@@ -33,6 +33,14 @@ public:
         return unfold_target_mode_;
     }
 
+    // Developer/proof diagnostics for the bounded lazy flag cache.
+    [[nodiscard]] std::size_t flag_cached_images() const noexcept {
+        return flag_render_cache_.images.size();
+    }
+    [[nodiscard]] bool flag_resource_loader_busy() const noexcept {
+        return flag_resource_loader_.busy();
+    }
+
 signals:
     // Emitted only for direct manipulation on the Globe. MainWindow mirrors
     // this value into precision controls without feeding it back into the map.
@@ -61,7 +69,7 @@ private:
     FlagResourceLoader flag_resource_loader_;
     FlagRenderCache flag_render_cache_;
     std::filesystem::path flag_project_path_;
-    std::uint64_t flag_project_revision_{0U};
+    std::string flag_project_uuid_;
 };
 
 }  // namespace aeris::desktop

@@ -326,20 +326,20 @@ MapWorkspaceView::MapWorkspaceView(QWidget* parent)
 void MapWorkspaceView::synchronize_flag_project(const ProjectModel* model) {
     const std::filesystem::path next_path =
         model != nullptr ? model->project_path : std::filesystem::path{};
-    const std::uint64_t next_revision =
-        model != nullptr ? current_project_revision() : 0U;
-    if (next_path == flag_project_path_ &&
-        next_revision == flag_project_revision_) {
+    const std::string next_uuid =
+        model != nullptr ? current_project_uuid() : std::string{};
+    if (next_path == flag_project_path_ && next_uuid == flag_project_uuid_) {
         return;
     }
 
-    // A durable resource mutation may replace flag bytes while the .aeris path
-    // remains unchanged. Path-only cache identity would then keep stale decoded
-    // images (or sticky failures) across the acknowledged revision boundary.
+    // ProjectResourceIdentity is immutable for one resource_id. Presentation
+    // revisions (visibility/name/order) therefore cannot make an already
+    // decoded flag stale. Keep the cache across those revisions and invalidate
+    // only when the actual project identity changes.
     flag_resource_loader_.cancel();
     flag_render_cache_ = {};
     flag_project_path_ = next_path;
-    flag_project_revision_ = next_revision;
+    flag_project_uuid_ = next_uuid;
 }
 
 void MapWorkspaceView::dispatch_flag_resource_requests() {
