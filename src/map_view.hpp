@@ -44,6 +44,14 @@ struct SurfaceProbeResult final {
     std::optional<std::int16_t> overview_elevation_m;
     std::optional<std::int16_t> detail_elevation_m;
     std::string detail_resource_id;
+    std::string elevation_layer_id;
+    std::string elevation_layer_name;
+    std::string elevation_provider;
+    std::string elevation_dataset;
+    std::string elevation_version;
+    std::string elevation_variant;
+    std::string elevation_source_uri;
+    std::string elevation_source_sha256;
 };
 
 // MapView owns canonical map presentation and navigation. Tool-specific
