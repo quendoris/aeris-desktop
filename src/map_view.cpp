@@ -732,68 +732,74 @@ std::optional<SurfaceProbeResult> MapView::surface_probe_at(
         result.material_version = provenance.dataset_version;
     };
 
-    bool explicit_classification = false;
+    // Project layer order is top-to-bottom while paintEvent renders it in
+    // reverse. Walk top-to-bottom here and stop at the first material layer
+    // that actually covers the picked point, so the diagnostic reports the
+    // material visible after composition rather than a preferred role type.
+    bool material_resolved = false;
     for (const storage::ProjectLayerRecord& layer : model_->layers) {
-        if (!layer.visible ||
-            layer.role_id != storage::kLayerRolePhysicalSurfaceClassificationV1) {
-            continue;
-        }
-        for (const storage::LayerSourceBinding& binding : layer.sources) {
-            if (binding.slot_id != "classification") continue;
-            const auto scene_it = frame_.source_scenes.find(binding.source_id);
-            const auto source_it = model_->sources.find(binding.source_id);
-            if (scene_it == frame_.source_scenes.end() ||
-                source_it == model_->sources.end() || !source_it->second) {
-                continue;
-            }
-            for (const view::SceneFeatureGeometry& geometry_feature :
-                 scene_it->second.features) {
-                const QPainterPath path = fill_path(geometry_feature);
-                if (path.isEmpty() || !path.contains(surface_point)) continue;
-                const source::Feature* feature = find_source_feature(
-                    *source_it->second,
-                    geometry_feature.stable_id
-                );
-                if (feature == nullptr) continue;
-                const auto value = surface_class_property(*feature);
-                if (!value.has_value()) continue;
+        if (!layer.visible) continue;
+
+        if (layer.role_id == storage::kLayerRolePhysicalSurfaceClassificationV1) {
+            for (const storage::LayerSourceBinding& binding : layer.sources) {
+                if (binding.slot_id != "classification") continue;
+                const auto scene_it = frame_.source_scenes.find(binding.source_id);
+                const auto source_it = model_->sources.find(binding.source_id);
+                if (scene_it == frame_.source_scenes.end() ||
+                    source_it == model_->sources.end() || !source_it->second) {
+                    continue;
+                }
+
+                std::optional<surface::SurfaceClass> visible_class;
+                for (const view::SceneFeatureGeometry& geometry_feature :
+                     scene_it->second.features) {
+                    const QPainterPath path = fill_path(geometry_feature);
+                    if (path.isEmpty() || !path.contains(surface_point)) continue;
+                    const source::Feature* feature = find_source_feature(
+                        *source_it->second,
+                        geometry_feature.stable_id
+                    );
+                    if (feature == nullptr) continue;
+                    const auto value = surface_class_property(*feature);
+                    if (!value.has_value() ||
+                        *value == surface::SurfaceClass::unknown) {
+                        continue;
+                    }
+                    // Later features in the same painter pass win if source
+                    // geometry overlaps, matching draw_surface_classification.
+                    visible_class = value;
+                }
+                if (!visible_class.has_value()) continue;
+
                 result.canonical_surface_class_id =
-                    std::string(surface::surface_class_id(*value));
+                    std::string(surface::surface_class_id(*visible_class));
                 result.presentation_material = result.canonical_surface_class_id;
                 assign_source(binding.source_id);
-                explicit_classification = true;
+                material_resolved = true;
                 break;
             }
-            if (explicit_classification) break;
-        }
-        if (explicit_classification) break;
-    }
-
-    if (!explicit_classification) {
-        bool land = false;
-        for (const storage::ProjectLayerRecord& layer : model_->layers) {
-            if (!layer.visible ||
-                layer.role_id != storage::kLayerRolePhysicalLandFillV1) {
-                continue;
-            }
+        } else if (layer.role_id == storage::kLayerRolePhysicalLandFillV1) {
             for (const storage::LayerSourceBinding& binding : layer.sources) {
                 if (binding.slot_id != "geometry") continue;
                 const auto scene_it = frame_.source_scenes.find(binding.source_id);
                 if (scene_it == frame_.source_scenes.end()) continue;
-                for (const view::SceneFeatureGeometry& geometry_feature :
-                     scene_it->second.features) {
-                    const QPainterPath path = fill_path(geometry_feature);
-                    if (!path.isEmpty() && path.contains(surface_point)) {
-                        result.presentation_material = "land";
-                        assign_source(binding.source_id);
-                        land = true;
-                        break;
+                const bool contains = std::any_of(
+                    scene_it->second.features.begin(),
+                    scene_it->second.features.end(),
+                    [&](const view::SceneFeatureGeometry& feature) {
+                        const QPainterPath path = fill_path(feature);
+                        return !path.isEmpty() && path.contains(surface_point);
                     }
-                }
-                if (land) break;
+                );
+                if (!contains) continue;
+                result.presentation_material = "land";
+                assign_source(binding.source_id);
+                material_resolved = true;
+                break;
             }
-            if (land) break;
         }
+
+        if (material_resolved) break;
     }
 
     for (const storage::ProjectLayerRecord& layer : model_->layers) {
