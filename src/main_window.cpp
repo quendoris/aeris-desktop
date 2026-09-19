@@ -351,16 +351,83 @@ void MainWindow::build_ui() {
     project_format_value_ = selectable_value(inspector);
     project_projection_value_ = selectable_value(inspector);
     project_state_value_ = selectable_value(inspector);
+    surface_probe_coordinate_value_ = selectable_value(inspector);
+    surface_probe_material_value_ = selectable_value(inspector);
+    surface_probe_elevation_value_ = selectable_value(inspector);
+    surface_probe_source_value_ = selectable_value(inspector);
+    surface_probe_coordinate_value_->setText(QStringLiteral("Shift+click the map"));
     form->addRow(QStringLiteral("Path"), project_path_value_);
     form->addRow(QStringLiteral("UUID"), project_uuid_value_);
     form->addRow(QStringLiteral("Revision"), project_revision_value_);
     form->addRow(QStringLiteral("Format"), project_format_value_);
     form->addRow(QStringLiteral("Projection"), project_projection_value_);
     form->addRow(QStringLiteral("State"), project_state_value_);
+    form->addRow(QStringLiteral("Probe coordinate"), surface_probe_coordinate_value_);
+    form->addRow(QStringLiteral("Probe material"), surface_probe_material_value_);
+    form->addRow(QStringLiteral("Probe elevation"), surface_probe_elevation_value_);
+    form->addRow(QStringLiteral("Probe source"), surface_probe_source_value_);
     inspector_dock_->setWidget(inspector);
     addDockWidget(Qt::RightDockWidgetArea, inspector_dock_);
     inspector_dock_->hide();
     view_menu->addAction(inspector_dock_->toggleViewAction());
+    map_view_->set_surface_probe_callback(
+        [this](const SurfaceProbeResult& probe) {
+            surface_probe_coordinate_value_->setText(
+                QStringLiteral("%1°, %2°")
+                    .arg(probe.longitude_deg, 0, 'f', 6)
+                    .arg(probe.latitude_deg, 0, 'f', 6)
+            );
+
+            QString material = QString::fromStdString(probe.presentation_material);
+            if (!probe.canonical_surface_class_id.empty()) {
+                material += QStringLiteral(" · canonical %1")
+                    .arg(QString::fromStdString(probe.canonical_surface_class_id));
+            } else {
+                material += QStringLiteral(" · presentation fallback");
+            }
+            surface_probe_material_value_->setText(material);
+
+            QString elevation;
+            if (probe.detail_elevation_m.has_value()) {
+                elevation = QStringLiteral("detail %1 m")
+                    .arg(*probe.detail_elevation_m);
+                if (!probe.detail_resource_id.empty()) {
+                    elevation += QStringLiteral(" · %1")
+                        .arg(QString::fromStdString(probe.detail_resource_id));
+                }
+            }
+            if (probe.overview_elevation_m.has_value()) {
+                if (!elevation.isEmpty()) elevation += QStringLiteral("\n");
+                elevation += QStringLiteral("overview %1 m")
+                    .arg(*probe.overview_elevation_m);
+            }
+            if (elevation.isEmpty()) elevation = QStringLiteral("—");
+            surface_probe_elevation_value_->setText(elevation);
+
+            QString source = QStringLiteral("—");
+            if (!probe.material_source_id.empty()) {
+                source = QString::fromStdString(probe.material_source_id);
+                if (!probe.material_provider.empty()) {
+                    source += QStringLiteral("\n%1")
+                        .arg(QString::fromStdString(probe.material_provider));
+                }
+                if (!probe.material_dataset.empty()) {
+                    source += QStringLiteral(" · %1")
+                        .arg(QString::fromStdString(probe.material_dataset));
+                }
+                if (!probe.material_version.empty()) {
+                    source += QStringLiteral(" · v%1")
+                        .arg(QString::fromStdString(probe.material_version));
+                }
+                if (!probe.material_snapshot.empty()) {
+                    source += QStringLiteral("\n%1")
+                        .arg(QString::fromStdString(probe.material_snapshot));
+                }
+            }
+            surface_probe_source_value_->setText(source);
+            inspector_dock_->show();
+        }
+    );
 
     data_job_widget_ = new QWidget(statusBar());
     data_job_widget_->setObjectName(QStringLiteral("dataJobStrip"));

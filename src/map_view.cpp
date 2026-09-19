@@ -570,6 +570,10 @@ void MapView::set_scene_request_callback(SceneRequestCallback callback) {
     scene_request_callback_ = std::move(callback);
 }
 
+void MapView::set_surface_probe_callback(SurfaceProbeCallback callback) {
+    surface_probe_callback_ = std::move(callback);
+}
+
 void MapView::set_frame(RenderFrame frame) {
     if (!frame.ok) {
         frame_error_ = std::move(frame.diagnostic);
@@ -661,6 +665,159 @@ void MapView::reset_viewport() {
     viewport_pan_ = {};
     store_active_viewport();
     update();
+}
+
+std::optional<SurfaceProbeResult> MapView::surface_probe_at(
+    const QPointF device_position
+) const {
+    if (!model_ || !has_current_frame() || model_->sources.empty()) {
+        return std::nullopt;
+    }
+
+    double min_x = 0.0;
+    double min_y = 0.0;
+    double max_x = 0.0;
+    double max_y = 0.0;
+    if (!combined_bounds(frame_, min_x, min_y, max_x, max_y)) {
+        return std::nullopt;
+    }
+
+    const double available_width = std::max(1, width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, height() - 2 * kMapMarginPx);
+    const double span_x = max_x - min_x;
+    const double span_y = max_y - min_y;
+    const double base_scale = std::min(
+        available_width / span_x,
+        available_height / span_y
+    );
+    const double center_x = 0.5 * (min_x + max_x);
+    const double center_y = 0.5 * (min_y + max_y);
+
+    QTransform surface_to_device;
+    surface_to_device.translate(
+        static_cast<double>(width()) * 0.5 + viewport_pan_.x(),
+        static_cast<double>(height()) * 0.5 + viewport_pan_.y()
+    );
+    surface_to_device.scale(base_scale * zoom_, -base_scale * zoom_);
+    surface_to_device.translate(-center_x, -center_y);
+    bool invertible = false;
+    const QTransform device_to_surface = surface_to_device.inverted(&invertible);
+    if (!invertible) return std::nullopt;
+
+    const QPointF surface_point = device_to_surface.map(device_position);
+    const view::SurfaceGeographicPickResult geographic =
+        view::pick_geographic_from_surface(
+            frame_.request.mode,
+            {surface_point.x(), surface_point.y()},
+            frame_.request.camera_longitude_deg,
+            frame_.request.camera_latitude_deg,
+            frame_.request.projection_central_meridian_deg
+        );
+    if (!geographic.ok) return std::nullopt;
+
+    SurfaceProbeResult result{};
+    result.longitude_deg = geographic.longitude_deg;
+    result.latitude_deg = geographic.latitude_deg;
+    result.presentation_material = "water/background";
+
+    const auto assign_source = [&](const std::string& source_id) {
+        result.material_source_id = source_id;
+        const auto source_it = model_->sources.find(source_id);
+        if (source_it == model_->sources.end() || !source_it->second) return;
+        const source::Provenance& provenance = source_it->second->provenance;
+        result.material_provider = provenance.provider;
+        result.material_dataset = provenance.dataset;
+        result.material_snapshot = provenance.snapshot;
+        result.material_version = provenance.dataset_version;
+    };
+
+    bool explicit_classification = false;
+    for (const storage::ProjectLayerRecord& layer : model_->layers) {
+        if (!layer.visible ||
+            layer.role_id != storage::kLayerRolePhysicalSurfaceClassificationV1) {
+            continue;
+        }
+        for (const storage::LayerSourceBinding& binding : layer.sources) {
+            if (binding.slot_id != "classification") continue;
+            const auto scene_it = frame_.source_scenes.find(binding.source_id);
+            const auto source_it = model_->sources.find(binding.source_id);
+            if (scene_it == frame_.source_scenes.end() ||
+                source_it == model_->sources.end() || !source_it->second) {
+                continue;
+            }
+            for (const view::SceneFeatureGeometry& geometry_feature :
+                 scene_it->second.features) {
+                const QPainterPath path = fill_path(geometry_feature);
+                if (path.isEmpty() || !path.contains(surface_point)) continue;
+                const source::Feature* feature = find_source_feature(
+                    *source_it->second,
+                    geometry_feature.stable_id
+                );
+                if (feature == nullptr) continue;
+                const auto value = surface_class_property(*feature);
+                if (!value.has_value()) continue;
+                result.canonical_surface_class_id =
+                    std::string(surface::surface_class_id(*value));
+                result.presentation_material = result.canonical_surface_class_id;
+                assign_source(binding.source_id);
+                explicit_classification = true;
+                break;
+            }
+            if (explicit_classification) break;
+        }
+        if (explicit_classification) break;
+    }
+
+    if (!explicit_classification) {
+        bool land = false;
+        for (const storage::ProjectLayerRecord& layer : model_->layers) {
+            if (!layer.visible ||
+                layer.role_id != storage::kLayerRolePhysicalLandFillV1) {
+                continue;
+            }
+            for (const storage::LayerSourceBinding& binding : layer.sources) {
+                if (binding.slot_id != "geometry") continue;
+                const auto scene_it = frame_.source_scenes.find(binding.source_id);
+                if (scene_it == frame_.source_scenes.end()) continue;
+                for (const view::SceneFeatureGeometry& geometry_feature :
+                     scene_it->second.features) {
+                    const QPainterPath path = fill_path(geometry_feature);
+                    if (!path.isEmpty() && path.contains(surface_point)) {
+                        result.presentation_material = "land";
+                        assign_source(binding.source_id);
+                        land = true;
+                        break;
+                    }
+                }
+                if (land) break;
+            }
+            if (land) break;
+        }
+    }
+
+    for (const storage::ProjectLayerRecord& layer : model_->layers) {
+        if (!layer.visible ||
+            layer.role_id != storage::kLayerRolePhysicalElevationV1) {
+            continue;
+        }
+        const ElevationProbeSample elevation = probe_elevation_at_geographic(
+            layer,
+            *model_,
+            elevation_surface_cache_,
+            geographic.longitude_deg,
+            geographic.latitude_deg
+        );
+        if (!elevation.overview_m.has_value() &&
+            !elevation.detail_m.has_value()) {
+            continue;
+        }
+        result.overview_elevation_m = elevation.overview_m;
+        result.detail_elevation_m = elevation.detail_m;
+        result.detail_resource_id = elevation.detail_resource_id;
+        break;
+    }
+
+    return result;
 }
 
 void MapView::paintEvent(QPaintEvent*) {
@@ -906,6 +1063,7 @@ void MapView::mousePressEvent(QMouseEvent* event) {
     }
     dragging_ = true;
     last_mouse_ = event->pos();
+    press_mouse_ = event->pos();
     setCursor(Qt::ClosedHandCursor);
     event->accept();
 }
@@ -942,11 +1100,20 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
+    const bool moved =
+        (event->pos() - press_mouse_).manhattanLength() > 4;
+    const bool probe_requested =
+        !moved && event->modifiers().testFlag(Qt::ShiftModifier);
+
     dragging_ = false;
     unsetCursor();
     end_interactive_terrain();
-    if (mode_ == view::SurfaceMode::globe) {
+    if (mode_ == view::SurfaceMode::globe && moved) {
         request_scene(view::SceneQuality::verified);
+    }
+    if (probe_requested && surface_probe_callback_) {
+        const auto probe = surface_probe_at(event->position());
+        if (probe.has_value()) surface_probe_callback_(*probe);
     }
     event->accept();
 }
