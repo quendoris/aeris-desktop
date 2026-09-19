@@ -158,6 +158,32 @@ constexpr int kTerrainInteractionRefineDelayMs = 120;
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::string> manifest_field(
+    const EmbeddedProjectResource& resource,
+    const std::string_view key
+) {
+    if (resource.bytes.empty() || key.empty()) return std::nullopt;
+    const std::string_view text(
+        reinterpret_cast<const char*>(resource.bytes.data()),
+        resource.bytes.size()
+    );
+    const std::string prefix = std::string(key) + "=";
+    std::size_t line_start = 0U;
+    while (line_start <= text.size()) {
+        const std::size_t line_end = text.find('\n', line_start);
+        const std::size_t end =
+            line_end == std::string_view::npos ? text.size() : line_end;
+        const std::string_view line = text.substr(line_start, end - line_start);
+        if (line.size() >= prefix.size() &&
+            line.compare(0U, prefix.size(), prefix) == 0) {
+            return std::string(line.substr(prefix.size()));
+        }
+        if (line_end == std::string_view::npos) break;
+        line_start = line_end + 1U;
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<std::int64_t> integer_property(
     const source::Feature& feature,
     const std::string_view key
@@ -821,6 +847,30 @@ std::optional<SurfaceProbeResult> MapView::surface_probe_at(
         result.overview_elevation_m = elevation.overview_m;
         result.detail_elevation_m = elevation.detail_m;
         result.detail_resource_id = elevation.detail_resource_id;
+        result.elevation_layer_id = layer.layer_id;
+        result.elevation_layer_name = layer.name;
+
+        for (const storage::LayerResourceBinding& binding : layer.resources) {
+            if (binding.slot_id != "provenance") continue;
+            const auto resource_it = model_->resources.find(binding.resource_id);
+            if (resource_it == model_->resources.end() || !resource_it->second) {
+                break;
+            }
+            const EmbeddedProjectResource& provenance = *resource_it->second;
+            const auto assign = [&](const std::string_view key, std::string& target) {
+                if (const auto value = manifest_field(provenance, key);
+                    value.has_value()) {
+                    target = *value;
+                }
+            };
+            assign("provider", result.elevation_provider);
+            assign("dataset", result.elevation_dataset);
+            assign("version", result.elevation_version);
+            assign("variant", result.elevation_variant);
+            assign("source_uri", result.elevation_source_uri);
+            assign("source_sha256", result.elevation_source_sha256);
+            break;
+        }
         break;
     }
 
