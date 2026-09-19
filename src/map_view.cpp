@@ -1069,6 +1069,7 @@ void MapView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     dragging_ = true;
+    drag_moved_ = false;
     last_mouse_ = event->pos();
     press_mouse_ = event->pos();
     setCursor(Qt::ClosedHandCursor);
@@ -1079,6 +1080,14 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
     if (!dragging_) {
         QWidget::mouseMoveEvent(event);
         return;
+    }
+
+    if (!drag_moved_) {
+        if ((event->pos() - press_mouse_).manhattanLength() <= 4) {
+            event->accept();
+            return;
+        }
+        drag_moved_ = true;
     }
 
     const QPoint delta = event->pos() - last_mouse_;
@@ -1107,12 +1116,12 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
-    const bool moved =
-        (event->pos() - press_mouse_).manhattanLength() > 4;
+    const bool moved = drag_moved_;
     const bool probe_requested =
         !moved && event->modifiers().testFlag(Qt::ShiftModifier);
 
     dragging_ = false;
+    drag_moved_ = false;
     unsetCursor();
     end_interactive_terrain();
     if (mode_ == view::SurfaceMode::globe && moved) {
