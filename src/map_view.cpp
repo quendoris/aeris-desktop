@@ -6,6 +6,7 @@
 #include "aeris/storage/layer.hpp"
 #include "aeris/surface/classification.hpp"
 #include "aeris/view/surface.hpp"
+#include "aeris/view/surface_inverse.hpp"
 
 #include <QFontMetricsF>
 #include <QKeyEvent>
