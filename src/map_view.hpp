@@ -233,6 +233,7 @@ private:
     QPoint last_mouse_{};
     QPoint press_mouse_{};
     bool dragging_{false};
+    bool drag_moved_{false};
     SceneRequestCallback scene_request_callback_;
     SurfaceProbeCallback surface_probe_callback_;
 };
