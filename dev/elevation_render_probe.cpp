@@ -559,7 +559,14 @@ struct RenderProof final {
         probe.presentation_material != "water/background" ||
         !probe.canonical_surface_class_id.empty() ||
         !probe.overview_elevation_m.has_value() ||
-        *probe.overview_elevation_m != *sample) {
+        *probe.overview_elevation_m != *sample ||
+        probe.elevation_provider != "AERIS CI" ||
+        probe.elevation_dataset != "Deterministic full-world elevation fixture" ||
+        probe.elevation_version != "1" ||
+        probe.elevation_variant != "surface" ||
+        probe.elevation_source_uri !=
+            "fixture://aeris/deterministic-global-elevation-v1" ||
+        probe.elevation_source_sha256.empty()) {
         std::cerr
             << "surface inspector disagrees with rendered positive non-land semantics: "
             << "lon=" << probe.longitude_deg
@@ -570,6 +577,9 @@ struct RenderProof final {
             << (probe.overview_elevation_m.has_value()
                     ? std::to_string(*probe.overview_elevation_m)
                     : std::string("none"))
+            << " elevation_provider=" << probe.elevation_provider
+            << " elevation_dataset=" << probe.elevation_dataset
+            << " elevation_variant=" << probe.elevation_variant
             << "\n";
         return false;
     }
