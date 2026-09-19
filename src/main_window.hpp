@@ -104,6 +104,7 @@ private:
     QLabel* surface_probe_material_value_{nullptr};
     QLabel* surface_probe_elevation_value_{nullptr};
     QLabel* surface_probe_source_value_{nullptr};
+    QLabel* surface_probe_elevation_source_value_{nullptr};
     QWidget* data_job_widget_{nullptr};
     QLabel* data_job_label_{nullptr};
     QProgressBar* data_job_progress_{nullptr};
