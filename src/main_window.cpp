@@ -355,6 +355,7 @@ void MainWindow::build_ui() {
     surface_probe_material_value_ = selectable_value(inspector);
     surface_probe_elevation_value_ = selectable_value(inspector);
     surface_probe_source_value_ = selectable_value(inspector);
+    surface_probe_elevation_source_value_ = selectable_value(inspector);
     surface_probe_coordinate_value_->setText(QStringLiteral("Shift+click the map"));
     form->addRow(QStringLiteral("Path"), project_path_value_);
     form->addRow(QStringLiteral("UUID"), project_uuid_value_);
@@ -365,7 +366,8 @@ void MainWindow::build_ui() {
     form->addRow(QStringLiteral("Probe coordinate"), surface_probe_coordinate_value_);
     form->addRow(QStringLiteral("Probe material"), surface_probe_material_value_);
     form->addRow(QStringLiteral("Probe elevation"), surface_probe_elevation_value_);
-    form->addRow(QStringLiteral("Probe source"), surface_probe_source_value_);
+    form->addRow(QStringLiteral("Probe material source"), surface_probe_source_value_);
+    form->addRow(QStringLiteral("Probe elevation source"), surface_probe_elevation_source_value_);
     inspector_dock_->setWidget(inspector);
     addDockWidget(Qt::RightDockWidgetArea, inspector_dock_);
     inspector_dock_->hide();
@@ -395,6 +397,8 @@ void MainWindow::build_ui() {
                     elevation += QStringLiteral(" · %1")
                         .arg(QString::fromStdString(probe.detail_resource_id));
                 }
+            } else if (probe.overview_elevation_m.has_value()) {
+                elevation = QStringLiteral("detail not cached");
             }
             if (probe.overview_elevation_m.has_value()) {
                 if (!elevation.isEmpty()) elevation += QStringLiteral("\n");
@@ -425,6 +429,32 @@ void MainWindow::build_ui() {
                 }
             }
             surface_probe_source_value_->setText(source);
+
+            QString elevation_source = QStringLiteral("—");
+            if (!probe.elevation_layer_id.empty()) {
+                elevation_source = QString::fromStdString(probe.elevation_layer_name);
+                elevation_source += QStringLiteral("\n%1")
+                    .arg(QString::fromStdString(probe.elevation_layer_id));
+                if (!probe.elevation_provider.empty() || !probe.elevation_dataset.empty()) {
+                    elevation_source += QStringLiteral("\n%1 · %2")
+                        .arg(QString::fromStdString(probe.elevation_provider))
+                        .arg(QString::fromStdString(probe.elevation_dataset));
+                }
+                if (!probe.elevation_version.empty() || !probe.elevation_variant.empty()) {
+                    elevation_source += QStringLiteral(" · v%1 · %2")
+                        .arg(QString::fromStdString(probe.elevation_version))
+                        .arg(QString::fromStdString(probe.elevation_variant));
+                }
+                if (!probe.elevation_source_uri.empty()) {
+                    elevation_source += QStringLiteral("\n%1")
+                        .arg(QString::fromStdString(probe.elevation_source_uri));
+                }
+                if (!probe.elevation_source_sha256.empty()) {
+                    elevation_source += QStringLiteral("\nsha256:%1")
+                        .arg(QString::fromStdString(probe.elevation_source_sha256));
+                }
+            }
+            surface_probe_elevation_source_value_->setText(elevation_source);
             inspector_dock_->show();
         }
     );
