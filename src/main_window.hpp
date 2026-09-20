@@ -100,6 +100,11 @@ private:
     QLabel* project_format_value_{nullptr};
     QLabel* project_projection_value_{nullptr};
     QLabel* project_state_value_{nullptr};
+    QLabel* surface_probe_coordinate_value_{nullptr};
+    QLabel* surface_probe_material_value_{nullptr};
+    QLabel* surface_probe_elevation_value_{nullptr};
+    QLabel* surface_probe_source_value_{nullptr};
+    QLabel* surface_probe_elevation_source_value_{nullptr};
     QWidget* data_job_widget_{nullptr};
     QLabel* data_job_label_{nullptr};
     QProgressBar* data_job_progress_{nullptr};

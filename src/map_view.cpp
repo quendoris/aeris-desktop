@@ -6,6 +6,7 @@
 #include "aeris/storage/layer.hpp"
 #include "aeris/surface/classification.hpp"
 #include "aeris/view/surface.hpp"
+#include "aeris/view/surface_inverse.hpp"
 
 #include <QFontMetricsF>
 #include <QKeyEvent>
@@ -153,6 +154,32 @@ constexpr int kTerrainInteractionRefineDelayMs = 120;
         return QColor(229, 234, 235, 248);
     case surface::SurfaceClass::floating_ice_shelf:
         return QColor(211, 226, 233, 248);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string> manifest_field(
+    const EmbeddedProjectResource& resource,
+    const std::string_view key
+) {
+    if (resource.bytes.empty() || key.empty()) return std::nullopt;
+    const std::string_view text(
+        reinterpret_cast<const char*>(resource.bytes.data()),
+        resource.bytes.size()
+    );
+    const std::string prefix = std::string(key) + "=";
+    std::size_t line_start = 0U;
+    while (line_start <= text.size()) {
+        const std::size_t line_end = text.find('\n', line_start);
+        const std::size_t end =
+            line_end == std::string_view::npos ? text.size() : line_end;
+        const std::string_view line = text.substr(line_start, end - line_start);
+        if (line.size() >= prefix.size() &&
+            line.compare(0U, prefix.size(), prefix) == 0) {
+            return std::string(line.substr(prefix.size()));
+        }
+        if (line_end == std::string_view::npos) break;
+        line_start = line_end + 1U;
     }
     return std::nullopt;
 }
@@ -570,6 +597,10 @@ void MapView::set_scene_request_callback(SceneRequestCallback callback) {
     scene_request_callback_ = std::move(callback);
 }
 
+void MapView::set_surface_probe_callback(SurfaceProbeCallback callback) {
+    surface_probe_callback_ = std::move(callback);
+}
+
 void MapView::set_frame(RenderFrame frame) {
     if (!frame.ok) {
         frame_error_ = std::move(frame.diagnostic);
@@ -661,6 +692,189 @@ void MapView::reset_viewport() {
     viewport_pan_ = {};
     store_active_viewport();
     update();
+}
+
+std::optional<SurfaceProbeResult> MapView::surface_probe_at(
+    const QPointF device_position
+) const {
+    if (!model_ || !has_current_frame() || model_->sources.empty()) {
+        return std::nullopt;
+    }
+
+    double min_x = 0.0;
+    double min_y = 0.0;
+    double max_x = 0.0;
+    double max_y = 0.0;
+    if (!combined_bounds(frame_, min_x, min_y, max_x, max_y)) {
+        return std::nullopt;
+    }
+
+    const double available_width = std::max(1, width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, height() - 2 * kMapMarginPx);
+    const double span_x = max_x - min_x;
+    const double span_y = max_y - min_y;
+    const double base_scale = std::min(
+        available_width / span_x,
+        available_height / span_y
+    );
+    const double center_x = 0.5 * (min_x + max_x);
+    const double center_y = 0.5 * (min_y + max_y);
+
+    QTransform surface_to_device;
+    surface_to_device.translate(
+        static_cast<double>(width()) * 0.5 + viewport_pan_.x(),
+        static_cast<double>(height()) * 0.5 + viewport_pan_.y()
+    );
+    surface_to_device.scale(base_scale * zoom_, -base_scale * zoom_);
+    surface_to_device.translate(-center_x, -center_y);
+    bool invertible = false;
+    const QTransform device_to_surface = surface_to_device.inverted(&invertible);
+    if (!invertible) return std::nullopt;
+
+    const QPointF surface_point = device_to_surface.map(device_position);
+    const view::SurfaceGeographicPickResult geographic =
+        view::pick_geographic_from_surface(
+            frame_.request.mode,
+            {surface_point.x(), surface_point.y()},
+            frame_.request.camera_longitude_deg,
+            frame_.request.camera_latitude_deg,
+            frame_.request.projection_central_meridian_deg
+        );
+    if (!geographic.ok) return std::nullopt;
+
+    SurfaceProbeResult result{};
+    result.longitude_deg = geographic.longitude_deg;
+    result.latitude_deg = geographic.latitude_deg;
+    result.presentation_material = "water/background";
+
+    const auto assign_source = [&](const std::string& source_id) {
+        result.material_source_id = source_id;
+        const auto source_it = model_->sources.find(source_id);
+        if (source_it == model_->sources.end() || !source_it->second) return;
+        const source::Provenance& provenance = source_it->second->provenance;
+        result.material_provider = provenance.provider;
+        result.material_dataset = provenance.dataset;
+        result.material_snapshot = provenance.snapshot;
+        result.material_version = provenance.dataset_version;
+    };
+
+    // Project layer order is top-to-bottom while paintEvent renders it in
+    // reverse. Walk top-to-bottom here and stop at the first material layer
+    // that actually covers the picked point, so the diagnostic reports the
+    // material visible after composition rather than a preferred role type.
+    bool material_resolved = false;
+    for (const storage::ProjectLayerRecord& layer : model_->layers) {
+        if (!layer.visible) continue;
+
+        if (layer.role_id == storage::kLayerRolePhysicalSurfaceClassificationV1) {
+            for (const storage::LayerSourceBinding& binding : layer.sources) {
+                if (binding.slot_id != "classification") continue;
+                const auto scene_it = frame_.source_scenes.find(binding.source_id);
+                const auto source_it = model_->sources.find(binding.source_id);
+                if (scene_it == frame_.source_scenes.end() ||
+                    source_it == model_->sources.end() || !source_it->second) {
+                    continue;
+                }
+
+                std::optional<surface::SurfaceClass> visible_class;
+                for (const view::SceneFeatureGeometry& geometry_feature :
+                     scene_it->second.features) {
+                    const QPainterPath path = fill_path(geometry_feature);
+                    if (path.isEmpty() || !path.contains(surface_point)) continue;
+                    const source::Feature* feature = find_source_feature(
+                        *source_it->second,
+                        geometry_feature.stable_id
+                    );
+                    if (feature == nullptr) continue;
+                    const auto value = surface_class_property(*feature);
+                    if (!value.has_value() ||
+                        *value == surface::SurfaceClass::unknown) {
+                        continue;
+                    }
+                    // Later features in the same painter pass win if source
+                    // geometry overlaps, matching draw_surface_classification.
+                    visible_class = value;
+                }
+                if (!visible_class.has_value()) continue;
+
+                result.canonical_surface_class_id =
+                    std::string(surface::surface_class_id(*visible_class));
+                result.presentation_material = result.canonical_surface_class_id;
+                assign_source(binding.source_id);
+                material_resolved = true;
+                break;
+            }
+        } else if (layer.role_id == storage::kLayerRolePhysicalLandFillV1) {
+            for (const storage::LayerSourceBinding& binding : layer.sources) {
+                if (binding.slot_id != "geometry") continue;
+                const auto scene_it = frame_.source_scenes.find(binding.source_id);
+                if (scene_it == frame_.source_scenes.end()) continue;
+                const bool contains = std::any_of(
+                    scene_it->second.features.begin(),
+                    scene_it->second.features.end(),
+                    [&](const view::SceneFeatureGeometry& feature) {
+                        const QPainterPath path = fill_path(feature);
+                        return !path.isEmpty() && path.contains(surface_point);
+                    }
+                );
+                if (!contains) continue;
+                result.presentation_material = "land";
+                assign_source(binding.source_id);
+                material_resolved = true;
+                break;
+            }
+        }
+
+        if (material_resolved) break;
+    }
+
+    for (const storage::ProjectLayerRecord& layer : model_->layers) {
+        if (!layer.visible ||
+            layer.role_id != storage::kLayerRolePhysicalElevationV1) {
+            continue;
+        }
+        const ElevationProbeSample elevation = probe_elevation_at_geographic(
+            layer,
+            *model_,
+            elevation_surface_cache_,
+            geographic.longitude_deg,
+            geographic.latitude_deg
+        );
+        if (!elevation.overview_m.has_value() &&
+            !elevation.detail_m.has_value()) {
+            continue;
+        }
+        result.overview_elevation_m = elevation.overview_m;
+        result.detail_elevation_m = elevation.detail_m;
+        result.detail_resource_id = elevation.detail_resource_id;
+        result.elevation_layer_id = layer.layer_id;
+        result.elevation_layer_name = layer.name;
+
+        for (const storage::LayerResourceBinding& binding : layer.resources) {
+            if (binding.slot_id != "provenance") continue;
+            const auto resource_it = model_->resources.find(binding.resource_id);
+            if (resource_it == model_->resources.end() || !resource_it->second) {
+                break;
+            }
+            const EmbeddedProjectResource& provenance = *resource_it->second;
+            const auto assign = [&](const std::string_view key, std::string& target) {
+                if (const auto value = manifest_field(provenance, key);
+                    value.has_value()) {
+                    target = *value;
+                }
+            };
+            assign("provider", result.elevation_provider);
+            assign("dataset", result.elevation_dataset);
+            assign("version", result.elevation_version);
+            assign("variant", result.elevation_variant);
+            assign("source_uri", result.elevation_source_uri);
+            assign("source_sha256", result.elevation_source_sha256);
+            break;
+        }
+        break;
+    }
+
+    return result;
 }
 
 void MapView::paintEvent(QPaintEvent*) {
@@ -905,7 +1119,9 @@ void MapView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     dragging_ = true;
+    drag_moved_ = false;
     last_mouse_ = event->pos();
+    press_mouse_ = event->pos();
     setCursor(Qt::ClosedHandCursor);
     event->accept();
 }
@@ -914,6 +1130,14 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
     if (!dragging_) {
         QWidget::mouseMoveEvent(event);
         return;
+    }
+
+    if (!drag_moved_) {
+        if ((event->pos() - press_mouse_).manhattanLength() <= 4) {
+            event->accept();
+            return;
+        }
+        drag_moved_ = true;
     }
 
     const QPoint delta = event->pos() - last_mouse_;
@@ -942,11 +1166,20 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
+    const bool moved = drag_moved_;
+    const bool probe_requested =
+        !moved && event->modifiers().testFlag(Qt::ShiftModifier);
+
     dragging_ = false;
+    drag_moved_ = false;
     unsetCursor();
     end_interactive_terrain();
-    if (mode_ == view::SurfaceMode::globe) {
+    if (mode_ == view::SurfaceMode::globe && moved) {
         request_scene(view::SceneQuality::verified);
+    }
+    if (probe_requested && surface_probe_callback_) {
+        const auto probe = surface_probe_at(event->position());
+        if (probe.has_value()) surface_probe_callback_(*probe);
     }
     event->accept();
 }

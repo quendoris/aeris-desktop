@@ -31,6 +31,7 @@ namespace {
     // streamed merely because a project opened.
     if (layer.role_id == storage::kLayerRoleCountryFlagV1) return false;
     if (layer.role_id != storage::kLayerRolePhysicalElevationV1) return true;
+    if (binding.slot_id == "provenance") return true;
     constexpr std::string_view overview_prefix = "overview:";
     return binding.slot_id.size() > overview_prefix.size() &&
         binding.slot_id.compare(0U, overview_prefix.size(), overview_prefix) == 0;

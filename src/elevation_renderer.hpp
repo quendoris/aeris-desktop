@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -69,6 +70,22 @@ struct ElevationSurfaceCache final {
     bool detail_lod_active{false};
     bool interactive_quality{false};
 };
+
+struct ElevationProbeSample final {
+    std::optional<std::int16_t> overview_m;
+    std::optional<std::int16_t> detail_m;
+    std::string detail_resource_id;
+};
+
+// Read-only diagnostic sampling over the exact durable numerical channels
+// already owned by the current ProjectModel/terrain cache. This never opens
+// storage, schedules detail I/O, or changes LRU state.
+[[nodiscard]] ElevationProbeSample probe_elevation_at_geographic(
+    const storage::ProjectLayerRecord& layer,
+    const ProjectModel& model,
+    const ElevationSurfaceCache& cache,
+    double longitude_deg,
+    double latitude_deg) noexcept;
 
 // Reprojects durable numerical elevation into the exact surface currently
 // rendered by MapView. Whole-world navigation uses the eagerly reconstructed

@@ -267,6 +267,63 @@ struct DetailGrid final {
     return pixel;
 }
 
+[[nodiscard]] std::optional<std::int16_t> sample_tile_elevation(
+    const elevation::ElevationTile& tile,
+    double longitude_deg,
+    const double latitude_deg,
+    const bool wrap_global_longitude
+) noexcept {
+    if (tile.width == 0U || tile.height == 0U ||
+        tile.samples_m.size() !=
+            static_cast<std::size_t>(tile.width) *
+            static_cast<std::size_t>(tile.height) ||
+        !std::isfinite(longitude_deg) || !std::isfinite(latitude_deg)) {
+        return std::nullopt;
+    }
+
+    constexpr double microarcsec_per_degree = 3600.0 * 1000000.0;
+    const double west_deg =
+        static_cast<double>(tile.west_microarcsec) / microarcsec_per_degree;
+    const double north_deg =
+        static_cast<double>(tile.north_microarcsec) / microarcsec_per_degree;
+    const double lon_step_deg =
+        static_cast<double>(tile.longitude_step_microarcsec) /
+        microarcsec_per_degree;
+    const double lat_step_deg =
+        static_cast<double>(tile.latitude_step_microarcsec) /
+        microarcsec_per_degree;
+    if (!(lon_step_deg > 0.0) || !(lat_step_deg > 0.0)) return std::nullopt;
+
+    if (wrap_global_longitude) {
+        longitude_deg = std::fmod(longitude_deg + 180.0, 360.0);
+        if (longitude_deg < 0.0) longitude_deg += 360.0;
+        longitude_deg -= 180.0;
+    }
+
+    double x = (longitude_deg - west_deg) / lon_step_deg - 0.5;
+    const double longitude_span =
+        static_cast<double>(tile.width) * lon_step_deg;
+    if (wrap_global_longitude && std::abs(longitude_span - 360.0) <= 1e-9) {
+        x = std::fmod(x, static_cast<double>(tile.width));
+        if (x < 0.0) x += static_cast<double>(tile.width);
+    }
+    double y = (north_deg - latitude_deg) / lat_step_deg - 0.5;
+    if (x < -0.5 || x > static_cast<double>(tile.width) - 0.5 ||
+        y < -0.5 || y > static_cast<double>(tile.height) - 0.5) {
+        return std::nullopt;
+    }
+    x = std::clamp(x, 0.0, static_cast<double>(tile.width - 1U));
+    y = std::clamp(y, 0.0, static_cast<double>(tile.height - 1U));
+    const auto ix = static_cast<std::uint32_t>(std::lround(x));
+    const auto iy = static_cast<std::uint32_t>(std::lround(y));
+    const std::int16_t value = tile.samples_m[
+        static_cast<std::size_t>(iy) * static_cast<std::size_t>(tile.width) +
+        static_cast<std::size_t>(ix)
+    ];
+    if (value == elevation::kNoDataMeters) return std::nullopt;
+    return value;
+}
+
 [[nodiscard]] bool validate_detail_tile(
     const elevation::ElevationTile& tile,
     const DetailGrid& grid,
@@ -741,6 +798,74 @@ void draw_elevation_overview(
     painter.setCompositionMode(QPainter::CompositionMode_Multiply);
     painter.drawImage(QRectF(viewport), cache.image);
     painter.restore();
+}
+
+ElevationProbeSample probe_elevation_at_geographic(
+    const storage::ProjectLayerRecord& layer,
+    const ProjectModel& model,
+    const ElevationSurfaceCache& cache,
+    double longitude_deg,
+    const double latitude_deg
+) noexcept {
+    ElevationProbeSample result{};
+    if (layer.role_id != storage::kLayerRolePhysicalElevationV1 ||
+        !std::isfinite(longitude_deg) || !std::isfinite(latitude_deg)) {
+        return result;
+    }
+
+    if (const EmbeddedProjectResource* overview = overview_resource(layer, model);
+        overview != nullptr && overview->elevation_tile.has_value()) {
+        result.overview_m = sample_tile_elevation(
+            *overview->elevation_tile,
+            longitude_deg,
+            latitude_deg,
+            true
+        );
+    }
+
+    const DetailGrid grid = detail_grid(layer);
+    if (!grid.valid || cache.detail_tiles.empty()) return result;
+
+    longitude_deg = std::fmod(longitude_deg + 180.0, 360.0);
+    if (longitude_deg < 0.0) longitude_deg += 360.0;
+    longitude_deg -= 180.0;
+    const double latitude = std::clamp(latitude_deg, -90.0, 90.0);
+    const double longitude_span = 360.0 / static_cast<double>(grid.columns);
+    const double latitude_span = 180.0 / static_cast<double>(grid.rows);
+    const auto column = static_cast<std::uint32_t>(std::clamp(
+        std::floor((longitude_deg + 180.0) / longitude_span),
+        0.0,
+        static_cast<double>(grid.columns - 1U)
+    ));
+    const auto row = static_cast<std::uint32_t>(std::clamp(
+        std::floor((90.0 - latitude) / latitude_span),
+        0.0,
+        static_cast<double>(grid.rows - 1U)
+    ));
+    const std::size_t binding_index =
+        static_cast<std::size_t>(row) * static_cast<std::size_t>(grid.columns) +
+        static_cast<std::size_t>(column);
+    if (binding_index >= grid.bindings.size() ||
+        grid.bindings[binding_index] == nullptr) {
+        return result;
+    }
+
+    const std::string& resource_id = grid.bindings[binding_index]->resource_id;
+    for (const ElevationDetailTileCacheEntry& entry : cache.detail_tiles) {
+        if (entry.resource_id != resource_id ||
+            !validate_detail_tile(entry.tile, grid, row, column)) {
+            continue;
+        }
+        result.detail_m = sample_tile_elevation(
+            entry.tile,
+            longitude_deg,
+            latitude,
+            false
+        );
+        if (result.detail_m.has_value()) result.detail_resource_id = resource_id;
+        break;
+    }
+    return result;
 }
 
 const std::vector<std::string>& elevation_detail_requests(

@@ -16,9 +16,11 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +31,29 @@ class QWheelEvent;
 
 namespace aeris::desktop {
 
+struct SurfaceProbeResult final {
+    double longitude_deg{0.0};
+    double latitude_deg{0.0};
+    std::string presentation_material;
+    std::string canonical_surface_class_id;
+    std::string material_source_id;
+    std::string material_provider;
+    std::string material_dataset;
+    std::string material_snapshot;
+    std::string material_version;
+    std::optional<std::int16_t> overview_elevation_m;
+    std::optional<std::int16_t> detail_elevation_m;
+    std::string detail_resource_id;
+    std::string elevation_layer_id;
+    std::string elevation_layer_name;
+    std::string elevation_provider;
+    std::string elevation_dataset;
+    std::string elevation_version;
+    std::string elevation_variant;
+    std::string elevation_source_uri;
+    std::string elevation_source_sha256;
+};
+
 // MapView owns canonical map presentation and navigation. Tool-specific
 // overlays may derive from it, but they must not reinterpret project geometry.
 class MapView : public QWidget {
@@ -36,6 +61,7 @@ class MapView : public QWidget {
 
 public:
     using SceneRequestCallback = std::function<void(const view::SceneRequest&)>;
+    using SurfaceProbeCallback = std::function<void(const SurfaceProbeResult&)>;
 
     explicit MapView(QWidget* parent = nullptr);
 
@@ -68,6 +94,7 @@ public:
     // is a control boundary, not another event queued behind background work.
     void prepare_shutdown() {
         scene_request_callback_ = {};
+        surface_probe_callback_ = {};
         if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
         terrain_interaction_active_ = false;
         elevation_detail_loader_.cancel();
@@ -77,6 +104,9 @@ public:
     void clear_project();
 
     void set_scene_request_callback(SceneRequestCallback callback);
+    void set_surface_probe_callback(SurfaceProbeCallback callback);
+    [[nodiscard]] std::optional<SurfaceProbeResult> surface_probe_at(
+        QPointF device_position) const;
     void set_frame(RenderFrame frame);
     void set_busy(bool busy);
     void set_surface_mode(view::SurfaceMode mode);
@@ -209,8 +239,11 @@ private:
     bool terrain_interaction_active_{false};
 
     QPoint last_mouse_{};
+    QPoint press_mouse_{};
     bool dragging_{false};
+    bool drag_moved_{false};
     SceneRequestCallback scene_request_callback_;
+    SurfaceProbeCallback surface_probe_callback_;
 };
 
 }  // namespace aeris::desktop

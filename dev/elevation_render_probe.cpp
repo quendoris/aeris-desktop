@@ -59,6 +59,7 @@ struct RenderProof final {
     bool interactive_quality{false};
     bool initial_interactive_quality{false};
     double zoom{1.0};
+    std::optional<aeris::desktop::SurfaceProbeResult> center_probe;
 };
 
 [[nodiscard]] bool build_frame(
@@ -179,6 +180,10 @@ struct RenderProof final {
     proof.raster_samples_used = view.elevation_raster_samples_used();
     proof.interactive_quality = view.elevation_interactive_quality();
     proof.zoom = view.zoom_factor();
+    proof.center_probe = view.surface_probe_at(QPointF(
+        static_cast<double>(view.width()) * 0.5,
+        static_cast<double>(view.height()) * 0.5
+    ));
     view.hide();
     application.processEvents();
     return proof;
@@ -541,6 +546,41 @@ struct RenderProof final {
             << "positive non-land elevation changed water into a non-water hue: rgb="
             << qRed(styled) << ',' << qGreen(styled) << ',' << qBlue(styled)
             << " elevation=" << *sample << "\n";
+        return false;
+    }
+
+    if (!with_relief.center_probe.has_value()) {
+        std::cerr << "surface inspector could not probe the rendered center coordinate\n";
+        return false;
+    }
+    const aeris::desktop::SurfaceProbeResult& probe = *with_relief.center_probe;
+    if (std::abs(probe.longitude_deg - longitude_deg) > 1e-6 ||
+        std::abs(probe.latitude_deg - latitude_deg) > 1e-6 ||
+        probe.presentation_material != "water/background" ||
+        !probe.canonical_surface_class_id.empty() ||
+        !probe.overview_elevation_m.has_value() ||
+        *probe.overview_elevation_m != *sample ||
+        probe.elevation_provider != "AERIS CI" ||
+        probe.elevation_dataset != "Deterministic full-world elevation fixture" ||
+        probe.elevation_version != "1" ||
+        probe.elevation_variant != "surface" ||
+        probe.elevation_source_uri !=
+            "fixture://aeris/deterministic-global-elevation-v1" ||
+        probe.elevation_source_sha256.empty()) {
+        std::cerr
+            << "surface inspector disagrees with rendered positive non-land semantics: "
+            << "lon=" << probe.longitude_deg
+            << " lat=" << probe.latitude_deg
+            << " material=" << probe.presentation_material
+            << " canonical=" << probe.canonical_surface_class_id
+            << " overview="
+            << (probe.overview_elevation_m.has_value()
+                    ? std::to_string(*probe.overview_elevation_m)
+                    : std::string("none"))
+            << " elevation_provider=" << probe.elevation_provider
+            << " elevation_dataset=" << probe.elevation_dataset
+            << " elevation_variant=" << probe.elevation_variant
+            << "\n";
         return false;
     }
 
