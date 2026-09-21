@@ -299,6 +299,27 @@ target_link_libraries(aeris-desktop-projection-catalog-probe PRIVATE
 target_compile_features(aeris-desktop-projection-catalog-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-etopo15-import-probe
+    dev/etopo15_import_probe.cpp
+    src/elevation_tiff.cpp
+    src/elevation_tiff.hpp
+    src/elevation_tiff_inspect.cpp
+    src/etopo15_import.cpp
+    src/etopo15_import.hpp
+    src/etopo15_tile.hpp
+)
+target_include_directories(aeris-desktop-etopo15-import-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-etopo15-import-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    TIFF::TIFF
+)
+target_compile_features(aeris-desktop-etopo15-import-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-etopo15-import-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 add_executable(aeris-desktop-etopo15-tile-probe
     dev/etopo15_tile_probe.cpp
     src/etopo15_tile.hpp
@@ -353,6 +374,7 @@ if(MSVC)
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-etopo15-import-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-etopo15-tile-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-sparse-elevation-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-viewport-demand-probe PRIVATE /W4 /permissive-)
@@ -367,6 +389,7 @@ else()
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-etopo15-import-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-etopo15-tile-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-sparse-elevation-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-viewport-demand-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
