@@ -66,8 +66,11 @@ jobs:
       - name: Build desktop and proof tools
         run: >-
           cmake --build build
-          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-data-worker-recovery-probe aeris-desktop-elevation-tiff-probe aeris-desktop-elevation-import-probe aeris-desktop-elevation-render-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe
+          --target aeris-desktop aeris-desktop-project-lifecycle-probe aeris-desktop-data-worker-recovery-probe aeris-desktop-elevation-tiff-probe aeris-desktop-elevation-import-probe aeris-desktop-elevation-render-probe aeris-desktop-render-probe aeris-desktop-projection-catalog-probe aeris-desktop-viewport-demand-probe
           --parallel 2
+
+      - name: Prove viewport demand normalization and coalescing keys
+        run: ./build/aeris-desktop-viewport-demand-probe
 
       - name: Prove compressed Float32 TIFF acquisition
         run: ./build/aeris-desktop-elevation-tiff-probe
