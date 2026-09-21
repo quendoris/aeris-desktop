@@ -295,6 +295,27 @@ target_link_libraries(aeris-desktop-projection-catalog-probe PRIVATE
 target_compile_features(aeris-desktop-projection-catalog-probe PRIVATE cxx_std_17)
 set_target_properties(aeris-desktop-projection-catalog-probe PROPERTIES CXX_EXTENSIONS OFF)
 
+add_executable(aeris-desktop-sparse-elevation-probe
+    dev/sparse_elevation_probe.cpp
+    src/elevation_renderer.cpp
+    src/elevation_renderer.hpp
+    src/elevation_style.hpp
+    src/project_model.hpp
+    src/scene_controller.hpp
+)
+target_include_directories(aeris-desktop-sparse-elevation-probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(aeris-desktop-sparse-elevation-probe PRIVATE
+    AERIS::core
+    AERIS::storage
+    AERIS::project
+    Qt6::Core
+    Qt6::Gui
+)
+target_compile_features(aeris-desktop-sparse-elevation-probe PRIVATE cxx_std_17)
+set_target_properties(aeris-desktop-sparse-elevation-probe PROPERTIES CXX_EXTENSIONS OFF)
+
 add_executable(aeris-desktop-viewport-demand-probe
     dev/viewport_demand_probe.cpp
     src/viewport_data_demand.hpp
@@ -319,6 +340,7 @@ if(MSVC)
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-render-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE /W4 /permissive-)
+    target_compile_options(aeris-desktop-sparse-elevation-probe PRIVATE /W4 /permissive-)
     target_compile_options(aeris-desktop-viewport-demand-probe PRIVATE /W4 /permissive-)
 else()
     target_compile_options(aeris-desktop PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
@@ -331,5 +353,6 @@ else()
     target_compile_options(aeris-desktop-elevation-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-render-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-projection-catalog-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
+    target_compile_options(aeris-desktop-sparse-elevation-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
     target_compile_options(aeris-desktop-viewport-demand-probe PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
