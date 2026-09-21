@@ -38,10 +38,8 @@ bool MainWindow::open_project_path(const std::filesystem::path& path) {
     }
 
     refresh_project_ui();
-    if (model_ && model_->sources.empty() && !project_->metadata().frozen) {
-        install_base_world();
-    } else {
-        layers_dock_->show();
+    layers_dock_->show();
+    if (data_job_ == nullptr) {
         statusBar()->showMessage(QStringLiteral("Opening durable AERIS map…"), 3500);
     }
     return true;
