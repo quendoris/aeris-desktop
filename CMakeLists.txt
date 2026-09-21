@@ -106,6 +106,9 @@ add_executable(aeris-data-worker
     src/elevation_tiff_inspect.cpp
     src/etopo_acquisition.cpp
     src/etopo_acquisition.hpp
+    src/etopo15_import.cpp
+    src/etopo15_import.hpp
+    src/etopo15_tile.hpp
     src/flag_pack_import.cpp
     src/flag_pack_import.hpp
     src/natural_earth_acquisition.cpp
