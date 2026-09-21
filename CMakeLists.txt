@@ -311,7 +311,6 @@ add_executable(aeris-desktop-sparse-elevation-probe
     src/elevation_renderer.hpp
     src/elevation_style.hpp
     src/project_model.hpp
-    src/scene_controller.hpp
 )
 target_include_directories(aeris-desktop-sparse-elevation-probe PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
