@@ -95,6 +95,17 @@ MainWindow::MainWindow(QWidget* parent)
             scene_controller_.request(request);
         }
     );
+    map_view_->set_viewport_data_demand_callback(
+        [this](
+            const view::SurfaceMode,
+            const double,
+            const double,
+            const double,
+            const double
+        ) {
+            handle_viewport_data_demand();
+        }
+    );
     scene_controller_.set_frame_callback(
         [this](RenderFrame frame) {
             if (!frame.ok) {
@@ -146,10 +157,10 @@ void MainWindow::build_ui() {
 
     auto* data_menu = menuBar()->addMenu(QStringLiteral("&Data"));
     install_base_world_action_ = data_menu->addAction(
-        QStringLiteral("Install / repair base political world")
+        QStringLiteral("Repair / reacquire base world")
     );
     install_base_world_action_->setToolTip(QStringLiteral(
-        "Acquire the exact pinned Natural Earth base map automatically, verify every resource, and commit it into the current .aeris project"
+        "Advanced recovery action. Normal projects acquire the minimum verified world automatically from viewport demand."
     ));
     connect(
         install_base_world_action_,
@@ -577,7 +588,6 @@ void MainWindow::new_project() {
     }
 
     refresh_project_ui();
-    install_base_world();
 }
 
 void MainWindow::open_project() {
@@ -611,9 +621,8 @@ void MainWindow::open_project() {
     }
 
     refresh_project_ui();
-    if (model_ && model_->sources.empty() && !project_->metadata().frozen) {
-        install_base_world();
-    } else {
+    layers_dock_->show();
+    if (data_job_ == nullptr) {
         statusBar()->showMessage(QStringLiteral("Opening durable AERIS map…"), 3500);
     }
 }
@@ -662,6 +671,41 @@ void MainWindow::finish_data_job_ui(DataJobProcess* job) {
     data_job_progress_->setRange(0, 0);
     data_job_progress_->setValue(0);
     data_job_cancel_button_->setEnabled(true);
+}
+
+bool MainWindow::needs_base_world_data() const noexcept {
+    if (!model_) return false;
+    if (model_->sources.empty()) return true;
+
+    bool land = false;
+    bool coastline = false;
+    bool countries = false;
+    bool borders = false;
+    bool labels = false;
+    bool surface = false;
+    for (const storage::ProjectLayerRecord& layer : model_->layers) {
+        if (layer.role_id == storage::kLayerRolePhysicalLandFillV1) land = true;
+        else if (layer.role_id == storage::kLayerRolePhysicalCoastlineV1) coastline = true;
+        else if (layer.role_id == storage::kLayerRolePoliticalCountryFillV1) countries = true;
+        else if (layer.role_id == storage::kLayerRolePoliticalBoundaryV1) borders = true;
+        else if (layer.role_id == storage::kLayerRoleCountryLabelV1) labels = true;
+        else if (layer.role_id == storage::kLayerRolePhysicalSurfaceClassificationV1) surface = true;
+    }
+    return !(land && coastline && countries && borders && labels && surface);
+}
+
+void MainWindow::handle_viewport_data_demand() {
+    if (!project_ || !model_ || project_->metadata().frozen ||
+        data_job_ != nullptr || !needs_base_world_data()) {
+        return;
+    }
+
+    statusBar()->showMessage(
+        QStringLiteral(
+            "Viewport needs the minimum verified world · acquiring it in the background…"
+        )
+    );
+    install_base_world();
 }
 
 void MainWindow::install_base_world() {
