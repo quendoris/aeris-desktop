@@ -7,10 +7,16 @@
 #include "map_view.hpp"
 
 #include <QCloseEvent>
+#include <QTimer>
 
 namespace aeris::desktop {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (viewport_data_demand_timer_ != nullptr) {
+        viewport_data_demand_timer_->stop();
+    }
+    pending_viewport_data_demand_.reset();
+
     // Close is a control boundary, not ordinary application work. Stop the
     // isolated data writer first so a long import can never make the GUI wait
     // for its completion. The worker owns its own ProjectStore handle; killing
