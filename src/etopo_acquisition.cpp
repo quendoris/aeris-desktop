@@ -50,9 +50,12 @@ constexpr Etopo2022SourceDescriptor kBedrock{
 };
 
 [[nodiscard]] QString path_to_qt(const std::filesystem::path& path) {
-    const std::string utf8 = path.generic_u8string();
+    const auto utf8 = path.generic_u8string();
     return QDir::fromNativeSeparators(
-        QString::fromUtf8(utf8.data(), static_cast<int>(utf8.size()))
+        QString::fromUtf8(
+            reinterpret_cast<const char*>(utf8.data()),
+            static_cast<int>(utf8.size())
+        )
     );
 }
 
