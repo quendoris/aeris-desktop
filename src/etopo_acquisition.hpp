@@ -3,6 +3,7 @@
 #pragma once
 
 #include "data_job_progress.hpp"
+#include "etopo15_tile.hpp"
 
 #include <filesystem>
 #include <string>
@@ -44,6 +45,16 @@ struct Etopo2022AcquisitionResult final {
 // publication and remains acquisition-only after import into .aeris.
 [[nodiscard]] Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     Etopo2022Variant variant,
+    const std::filesystem::path& cache_root,
+    const DataJobProgressCallback& progress = {}
+);
+
+// Acquire exactly one official NOAA/NCEI ETOPO 2022 v1 15 arc-second
+// Surface tile selected by the provider planner. The same cross-process safe
+// Range/If-Range policy as the global importer is used, but the structural
+// contract is one 3600x3600 Float32 GeoTIFF rather than a global grid.
+[[nodiscard]] Etopo2022AcquisitionResult acquire_etopo2022_surface_15s_tile(
+    const Etopo15SurfaceTileDescriptor& tile,
     const std::filesystem::path& cache_root,
     const DataJobProgressCallback& progress = {}
 );

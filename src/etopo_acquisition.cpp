@@ -22,14 +22,15 @@
 #include <filesystem>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
 namespace aeris::desktop {
 namespace {
 
-constexpr std::uint32_t kWidth = 21600U;
-constexpr std::uint32_t kHeight = 10800U;
+constexpr std::uint32_t kGlobalWidth = 21600U;
+constexpr std::uint32_t kGlobalHeight = 10800U;
 
 constexpr Etopo2022SourceDescriptor kSurface{
     Etopo2022Variant::ice_surface,
@@ -47,6 +48,14 @@ constexpr Etopo2022SourceDescriptor kBedrock{
     "ETOPO_2022_v1_60s_N90W180_bed.tif",
     "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/data/60s/"
     "60s_bed_elev_gtif/ETOPO_2022_v1_60s_N90W180_bed.tif",
+};
+
+struct AcquisitionSpec final {
+    std::string filename;
+    std::string url;
+    std::string progress_label;
+    std::uint32_t expected_width{0U};
+    std::uint32_t expected_height{0U};
 };
 
 [[nodiscard]] QString path_to_qt(const std::filesystem::path& path) {
@@ -78,6 +87,8 @@ constexpr Etopo2022SourceDescriptor kBedrock{
 
 [[nodiscard]] bool valid_etopo_file(
     const std::filesystem::path& path,
+    const std::uint32_t expected_width,
+    const std::uint32_t expected_height,
     std::string& diagnostic
 ) {
     const Float32TiffInspectResult inspected = inspect_single_band_float32_tiff(path);
@@ -87,10 +98,15 @@ constexpr Etopo2022SourceDescriptor kBedrock{
             : inspected.diagnostic;
         return false;
     }
-    if (inspected.info.width != kWidth || inspected.info.height != kHeight) {
-        diagnostic = "downloaded ETOPO file has an unexpected global grid: " +
+    if (inspected.info.width != expected_width ||
+        inspected.info.height != expected_height) {
+        diagnostic =
+            "downloaded ETOPO file has an unexpected grid: " +
             std::to_string(inspected.info.width) + "x" +
-            std::to_string(inspected.info.height);
+            std::to_string(inspected.info.height) +
+            " expected " +
+            std::to_string(expected_width) + "x" +
+            std::to_string(expected_height);
         return false;
     }
     return true;
@@ -153,40 +169,42 @@ void save_if_range_validator(
     const std::filesystem::path& part,
     const std::filesystem::path& validator_path,
     const std::filesystem::path& target,
+    const AcquisitionSpec& spec,
     std::string& diagnostic
 ) {
     std::string validation;
-    if (!valid_etopo_file(part, validation)) {
+    if (!valid_etopo_file(
+            part,
+            spec.expected_width,
+            spec.expected_height,
+            validation
+        )) {
         QFile::remove(path_to_qt(part));
         QFile::remove(path_to_qt(validator_path));
-        diagnostic = "downloaded ETOPO GeoTIFF failed structural validation: " + validation;
+        diagnostic =
+            "downloaded ETOPO GeoTIFF failed structural validation: " +
+            validation;
         return false;
     }
 
     QFile::remove(path_to_qt(target));
     if (!QFile::rename(path_to_qt(part), path_to_qt(target))) {
-        diagnostic = "could not publish verified ETOPO GeoTIFF into the acquisition cache";
+        diagnostic =
+            "could not publish verified ETOPO GeoTIFF into the acquisition cache";
         return false;
     }
     QFile::remove(path_to_qt(validator_path));
     return true;
 }
 
-}  // namespace
-
-Etopo2022SourceDescriptor etopo2022_source_descriptor(
-    const Etopo2022Variant variant
-) noexcept {
-    return variant == Etopo2022Variant::bedrock ? kBedrock : kSurface;
-}
-
-Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
-    const Etopo2022Variant variant,
+[[nodiscard]] Etopo2022AcquisitionResult acquire_etopo_file(
+    const AcquisitionSpec& spec,
     const std::filesystem::path& cache_root,
     const DataJobProgressCallback& progress
 ) {
-    if (cache_root.empty()) {
-        return {false, false, {}, "ETOPO acquisition requires a cache directory"};
+    if (cache_root.empty() || spec.filename.empty() || spec.url.empty() ||
+        spec.expected_width == 0U || spec.expected_height == 0U) {
+        return {false, false, {}, "ETOPO acquisition requires a valid cache and source specification"};
     }
 
     std::string diagnostic;
@@ -194,18 +212,21 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
         return {false, false, {}, std::move(diagnostic)};
     }
 
-    const Etopo2022SourceDescriptor source = etopo2022_source_descriptor(variant);
-    const std::filesystem::path target = cache_root / std::string(source.filename);
-
+    const std::filesystem::path target = cache_root / spec.filename;
     std::error_code target_error;
     if (std::filesystem::exists(target, target_error) && !target_error) {
         std::string validation;
-        if (valid_etopo_file(target, validation)) {
+        if (valid_etopo_file(
+                target,
+                spec.expected_width,
+                spec.expected_height,
+                validation
+            )) {
             report_data_job_progress(
                 progress,
                 1U,
                 1U,
-                std::string("ETOPO ") + std::string(source.id) + " · cached"
+                spec.progress_label + " · cached"
             );
             return {true, true, target, {}};
         }
@@ -231,8 +252,6 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     if (partial_size > 0U) {
         if_range = load_if_range_validator(validator_path);
         if (if_range.isEmpty()) {
-            // Cross-process resume without a representation validator could mix
-            // bytes from two different remote objects. Restart instead.
             QFile::remove(path_to_qt(part));
             partial_size = 0U;
         }
@@ -249,16 +268,26 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     }
     if (partial_size == 0U) {
         if (!output.resize(0)) {
-            return {false, false, target, "could not reset resumable ETOPO download file"};
+            return {
+                false,
+                false,
+                target,
+                "could not reset resumable ETOPO download file"
+            };
         }
         QFile::remove(path_to_qt(validator_path));
     }
     if (!output.seek(static_cast<qint64>(partial_size))) {
-        return {false, false, target, "could not seek resumable ETOPO download file"};
+        return {
+            false,
+            false,
+            target,
+            "could not seek resumable ETOPO download file"
+        };
     }
 
     QNetworkAccessManager network;
-    QNetworkRequest request(QUrl(QString::fromUtf8(source.url.data(), static_cast<int>(source.url.size()))));
+    QNetworkRequest request(QUrl(QString::fromStdString(spec.url)));
     request.setAttribute(
         QNetworkRequest::RedirectPolicyAttribute,
         QNetworkRequest::NoLessSafeRedirectPolicy
@@ -287,16 +316,19 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
 
     const auto prepare_response_mode = [&]() {
         if (response_mode_ready || response_failed) return;
-        const QVariant raw_status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+        const QVariant raw_status =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         if (!raw_status.isValid()) return;
         const int status = raw_status.toInt();
 
         if (base_offset > 0 && status == 206) {
-            const QByteArray content_range = reply->rawHeader(QByteArrayLiteral("Content-Range"));
+            const QByteArray content_range =
+                reply->rawHeader(QByteArrayLiteral("Content-Range"));
             if (!content_range_starts_at(content_range, base_offset)) {
                 response_failed = true;
                 response_failure =
-                    "ETOPO resume response has an unexpected Content-Range; existing partial bytes were left untouched";
+                    "ETOPO resume response has an unexpected Content-Range; "
+                    "existing partial bytes were left untouched";
                 return;
             }
             response_writable = true;
@@ -305,8 +337,6 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
         }
 
         if (base_offset > 0 && status == 200) {
-            // If-Range failed or the server ignored Range. A complete response
-            // must replace, never append to, the previous partial prefix.
             if (!output.resize(0) || !output.seek(0)) {
                 write_failed = true;
                 return;
@@ -329,7 +359,10 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
         prepare_response_mode();
         if (!response_mode_ready && !response_failed && !write_failed) return;
         const QByteArray chunk = reply->readAll();
-        if (response_failed || write_failed || !response_writable || chunk.isEmpty()) return;
+        if (response_failed || write_failed || !response_writable ||
+            chunk.isEmpty()) {
+            return;
+        }
         if (output.write(chunk) != chunk.size()) write_failed = true;
     };
 
@@ -343,13 +376,15 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
                 std::max<qint64>(0, base_offset + received)
             );
             const std::uint64_t expected = total > 0
-                ? static_cast<std::uint64_t>(std::max<qint64>(0, base_offset + total))
+                ? static_cast<std::uint64_t>(
+                    std::max<qint64>(0, base_offset + total)
+                )
                 : 0U;
             report_data_job_progress(
                 progress,
                 current,
                 expected,
-                std::string("Downloading ETOPO 2022 · ") + std::string(source.id)
+                "Downloading " + spec.progress_label
             );
         }
     );
@@ -361,7 +396,8 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     output.flush();
     output.close();
 
-    const QVariant raw_status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    const QVariant raw_status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
     const int status = raw_status.isValid() ? raw_status.toInt() : 0;
     const QNetworkReply::NetworkError network_error = reply->error();
     const QString error_text = reply->errorString();
@@ -377,8 +413,19 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
     if (network_error != QNetworkReply::NoError) {
         if (status == 416 && !if_range.isEmpty()) {
             std::string validation;
-            if (valid_etopo_file(part, validation) &&
-                publish_part(part, validator_path, target, diagnostic)) {
+            if (valid_etopo_file(
+                    part,
+                    spec.expected_width,
+                    spec.expected_height,
+                    validation
+                ) &&
+                publish_part(
+                    part,
+                    validator_path,
+                    target,
+                    spec,
+                    diagnostic
+                )) {
                 return {true, false, target, {}};
             }
         }
@@ -401,7 +448,13 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
         };
     }
 
-    if (!publish_part(part, validator_path, target, diagnostic)) {
+    if (!publish_part(
+            part,
+            validator_path,
+            target,
+            spec,
+            diagnostic
+        )) {
         return {false, false, target, std::move(diagnostic)};
     }
 
@@ -409,9 +462,71 @@ Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
         progress,
         1U,
         1U,
-        std::string("ETOPO ") + std::string(source.id) + " · acquired and verified"
+        spec.progress_label + " · acquired and verified"
     );
     return {true, false, target, {}};
+}
+
+}  // namespace
+
+Etopo2022SourceDescriptor etopo2022_source_descriptor(
+    const Etopo2022Variant variant
+) noexcept {
+    return variant == Etopo2022Variant::bedrock ? kBedrock : kSurface;
+}
+
+Etopo2022AcquisitionResult acquire_etopo2022_global_60s(
+    const Etopo2022Variant variant,
+    const std::filesystem::path& cache_root,
+    const DataJobProgressCallback& progress
+) {
+    const Etopo2022SourceDescriptor source =
+        etopo2022_source_descriptor(variant);
+    return acquire_etopo_file(
+        AcquisitionSpec{
+            std::string(source.filename),
+            std::string(source.url),
+            "ETOPO 2022 60s · " + std::string(source.id),
+            kGlobalWidth,
+            kGlobalHeight,
+        },
+        cache_root,
+        progress
+    );
+}
+
+Etopo2022AcquisitionResult acquire_etopo2022_surface_15s_tile(
+    const Etopo15SurfaceTileDescriptor& tile,
+    const std::filesystem::path& cache_root,
+    const DataJobProgressCallback& progress
+) {
+    const auto canonical =
+        etopo15_surface_tile_for_indices(tile.row, tile.column);
+    if (!canonical.has_value() ||
+        canonical->filename != tile.filename ||
+        canonical->url != tile.url) {
+        return {
+            false,
+            false,
+            {},
+            "ETOPO 15s acquisition descriptor is not canonical for its grid cell"
+        };
+    }
+
+    return acquire_etopo_file(
+        AcquisitionSpec{
+            tile.filename,
+            tile.url,
+            "ETOPO 2022 15s Surface · r" +
+                std::to_string(tile.row) +
+                " c" +
+                std::to_string(tile.column),
+            kEtopo15TilePixels,
+            kEtopo15TilePixels,
+        },
+        cache_root,
+        progress
+    );
 }
 
 }  // namespace aeris::desktop

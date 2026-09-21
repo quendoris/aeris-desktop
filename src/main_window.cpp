@@ -636,6 +636,7 @@ void MainWindow::close_project() {
     if (viewport_data_demand_timer_ != nullptr) viewport_data_demand_timer_->stop();
     pending_viewport_data_demand_.reset();
     last_viewport_coverage_key_.reset();
+    blocked_streaming_tile_slot_.reset();
     scene_controller_.cancel();
     scene_controller_.set_model(nullptr);
     model_.reset();
@@ -737,6 +738,11 @@ void MainWindow::flush_viewport_data_demand() {
         return;
     }
 
+    if (demand.detail_tier == ViewportDetailTier::local ||
+        demand.detail_tier == ViewportDetailTier::fine) {
+        if (request_streamed_etopo15(demand)) return;
+    }
+
     const ViewportCoverageKey key = viewport_coverage_key(demand);
     if (last_viewport_coverage_key_.has_value() &&
         *last_viewport_coverage_key_ == key) {
@@ -744,9 +750,9 @@ void MainWindow::flush_viewport_data_demand() {
     }
     last_viewport_coverage_key_ = key;
 
-    // Higher-detail providers plug in here. This slice deliberately records and
-    // coalesces normalized demand without pretending that the existing global
-    // ETOPO importer is regional streaming.
+    // Other higher-detail providers plug in here. Provider-specific coverage
+    // remains authoritative: the generic focus-cell key is only a fallback
+    // orchestration identity and never substitutes for a provider's tile grid.
 }
 
 void MainWindow::install_base_world() {
@@ -1011,6 +1017,7 @@ bool MainWindow::load_render_model() {
     } else {
         pending_viewport_data_demand_.reset();
         last_viewport_coverage_key_.reset();
+        blocked_streaming_tile_slot_.reset();
         map_view_->set_project(model_, metadata.project_uuid, metadata.revision);
         cut_slider_->setValue(0);
     }

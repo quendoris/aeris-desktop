@@ -77,6 +77,8 @@ private:
     [[nodiscard]] bool needs_base_world_data() const noexcept;
     void handle_viewport_data_demand(const ViewportDataDemand& demand);
     void flush_viewport_data_demand();
+    [[nodiscard]] bool request_streamed_etopo15(
+        const ViewportDataDemand& demand);
     void import_world_data();
     void begin_data_job_ui(DataJobProcess* job, const QString& initial_phase);
     void finish_data_job_ui(DataJobProcess* job);
@@ -129,6 +131,7 @@ private:
     DataJobProcess* data_job_{nullptr};
     std::optional<ViewportDataDemand> pending_viewport_data_demand_;
     std::optional<ViewportCoverageKey> last_viewport_coverage_key_;
+    std::optional<std::string> blocked_streaming_tile_slot_;
     std::map<std::filesystem::path, std::map<std::string, bool>> deferred_layer_visibility_;
     bool deferred_layer_visibility_flush_scheduled_{false};
     bool rebuilding_layers_{false};
