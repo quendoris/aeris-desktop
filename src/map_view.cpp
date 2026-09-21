@@ -573,6 +573,7 @@ void MapView::set_project_model(
     elevation_surface_cache_ = {};
     update();
     request_scene(view::SceneQuality::verified);
+    notify_viewport_data_demand();
 }
 
 void MapView::clear_project() {
@@ -1204,15 +1205,83 @@ void MapView::mouseDoubleClickEvent(QMouseEvent* event) {
     event->accept();
 }
 
+std::optional<std::pair<double, double>> MapView::geographic_at_device(
+    const QPointF device_position
+) const {
+    if (!model_ || !has_current_frame() || model_->sources.empty()) {
+        return std::nullopt;
+    }
+
+    double min_x = 0.0;
+    double min_y = 0.0;
+    double max_x = 0.0;
+    double max_y = 0.0;
+    if (!combined_bounds(frame_, min_x, min_y, max_x, max_y)) {
+        return std::nullopt;
+    }
+
+    const double available_width = std::max(1, width() - 2 * kMapMarginPx);
+    const double available_height = std::max(1, height() - 2 * kMapMarginPx);
+    const double span_x = max_x - min_x;
+    const double span_y = max_y - min_y;
+    const double base_scale = std::min(
+        available_width / span_x,
+        available_height / span_y
+    );
+    const double center_x = 0.5 * (min_x + max_x);
+    const double center_y = 0.5 * (min_y + max_y);
+
+    QTransform surface_to_device;
+    surface_to_device.translate(
+        static_cast<double>(width()) * 0.5 + viewport_pan_.x(),
+        static_cast<double>(height()) * 0.5 + viewport_pan_.y()
+    );
+    surface_to_device.scale(base_scale * zoom_, -base_scale * zoom_);
+    surface_to_device.translate(-center_x, -center_y);
+
+    bool invertible = false;
+    const QTransform device_to_surface = surface_to_device.inverted(&invertible);
+    if (!invertible) return std::nullopt;
+
+    const QPointF surface_point = device_to_surface.map(device_position);
+    const view::SurfaceGeographicPickResult geographic =
+        view::pick_geographic_from_surface(
+            frame_.request.mode,
+            {surface_point.x(), surface_point.y()},
+            frame_.request.camera_longitude_deg,
+            frame_.request.camera_latitude_deg,
+            frame_.request.projection_central_meridian_deg
+        );
+    if (!geographic.ok) return std::nullopt;
+    return std::pair<double, double>{
+        geographic.longitude_deg,
+        geographic.latitude_deg
+    };
+}
+
 void MapView::notify_viewport_data_demand() {
     if (!model_ || !viewport_data_demand_callback_) return;
-    viewport_data_demand_callback_(
-        mode_,
-        zoom_,
-        longitude_deg_,
-        latitude_deg_,
-        projection_central_meridian_deg_
-    );
+
+    double focus_longitude = longitude_deg_;
+    double focus_latitude = latitude_deg_;
+    if (const auto focus = geographic_at_device(
+            QPointF(
+                static_cast<double>(width()) * 0.5,
+                static_cast<double>(height()) * 0.5
+            ));
+        focus.has_value()) {
+        focus_longitude = focus->first;
+        focus_latitude = focus->second;
+    }
+
+    ViewportDataDemand demand{};
+    demand.surface_mode = mode_;
+    demand.zoom = zoom_;
+    demand.focus_longitude_deg = focus_longitude;
+    demand.focus_latitude_deg = focus_latitude;
+    demand.projection_central_meridian_deg = projection_central_meridian_deg_;
+    demand.detail_tier = viewport_detail_tier_for_zoom(zoom_);
+    viewport_data_demand_callback_(demand);
 }
 
 void MapView::request_scene(const view::SceneQuality quality) {

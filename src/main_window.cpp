@@ -30,6 +30,7 @@
 #include <QSlider>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -90,20 +91,24 @@ MainWindow::MainWindow(QWidget* parent)
     build_ui();
     apply_theme();
 
+    viewport_data_demand_timer_ = new QTimer(this);
+    viewport_data_demand_timer_->setSingleShot(true);
+    viewport_data_demand_timer_->setInterval(120);
+    connect(
+        viewport_data_demand_timer_,
+        &QTimer::timeout,
+        this,
+        &MainWindow::flush_viewport_data_demand
+    );
+
     map_view_->set_scene_request_callback(
         [this](const view::SceneRequest& request) {
             scene_controller_.request(request);
         }
     );
     map_view_->set_viewport_data_demand_callback(
-        [this](
-            const view::SurfaceMode,
-            const double,
-            const double,
-            const double,
-            const double
-        ) {
-            handle_viewport_data_demand();
+        [this](const ViewportDataDemand& demand) {
+            handle_viewport_data_demand(demand);
         }
     );
     scene_controller_.set_frame_callback(
@@ -628,6 +633,9 @@ void MainWindow::open_project() {
 }
 
 void MainWindow::close_project() {
+    if (viewport_data_demand_timer_ != nullptr) viewport_data_demand_timer_->stop();
+    pending_viewport_data_demand_.reset();
+    last_viewport_coverage_key_.reset();
     scene_controller_.cancel();
     scene_controller_.set_model(nullptr);
     model_.reset();
@@ -694,18 +702,51 @@ bool MainWindow::needs_base_world_data() const noexcept {
     return !(land && coastline && countries && borders && labels && surface);
 }
 
-void MainWindow::handle_viewport_data_demand() {
-    if (!project_ || !model_ || project_->metadata().frozen ||
-        data_job_ != nullptr || !needs_base_world_data()) {
+void MainWindow::handle_viewport_data_demand(
+    const ViewportDataDemand& demand
+) {
+    pending_viewport_data_demand_ = demand;
+    if (viewport_data_demand_timer_ != nullptr) {
+        // Restart the quiet-period clock: rapid wheel/pan/rotate activity
+        // collapses to the latest stable request instead of queueing obsolete
+        // provider work.
+        viewport_data_demand_timer_->start();
+    }
+}
+
+void MainWindow::flush_viewport_data_demand() {
+    if (!pending_viewport_data_demand_.has_value()) return;
+    const ViewportDataDemand demand = *pending_viewport_data_demand_;
+    pending_viewport_data_demand_.reset();
+
+    if (!project_ || !model_ || project_->metadata().frozen) return;
+
+    if (needs_base_world_data()) {
+        if (data_job_ != nullptr) {
+            // The current worker owns the project writer. The model refresh on
+            // completion emits a fresh demand, so no polling/retry loop belongs
+            // in the GUI thread.
+            return;
+        }
+        statusBar()->showMessage(
+            QStringLiteral(
+                "Viewport needs the minimum verified world · acquiring it in the background…"
+            )
+        );
+        install_base_world();
         return;
     }
 
-    statusBar()->showMessage(
-        QStringLiteral(
-            "Viewport needs the minimum verified world · acquiring it in the background…"
-        )
-    );
-    install_base_world();
+    const ViewportCoverageKey key = viewport_coverage_key(demand);
+    if (last_viewport_coverage_key_.has_value() &&
+        *last_viewport_coverage_key_ == key) {
+        return;
+    }
+    last_viewport_coverage_key_ = key;
+
+    // Higher-detail providers plug in here. This slice deliberately records and
+    // coalesces normalized demand without pretending that the existing global
+    // ETOPO importer is regional streaming.
 }
 
 void MainWindow::install_base_world() {
@@ -953,11 +994,27 @@ bool MainWindow::load_render_model() {
         return false;
     }
 
+    const bool same_project =
+        model_ != nullptr &&
+        loaded.model != nullptr &&
+        model_->project_path == loaded.model->project_path;
+
     model_ = std::move(loaded.model);
     scene_controller_.set_model(model_);
     const auto& metadata = project_->metadata();
-    map_view_->set_project(model_, metadata.project_uuid, metadata.revision);
-    cut_slider_->setValue(0);
+
+    if (same_project) {
+        // Progressive acquisition is a model revision, not a navigation event.
+        // Preserve camera, zoom, pan, surface mode and projection cut while the
+        // same .aeris gains newly verified durable content.
+        map_view_->set_project_model(model_, metadata.revision);
+    } else {
+        pending_viewport_data_demand_.reset();
+        last_viewport_coverage_key_.reset();
+        map_view_->set_project(model_, metadata.project_uuid, metadata.revision);
+        cut_slider_->setValue(0);
+    }
+
     rebuild_layer_tree();
     return true;
 }

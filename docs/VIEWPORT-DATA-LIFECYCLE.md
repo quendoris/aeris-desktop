@@ -89,7 +89,7 @@ The target behavior is:
 5. switching to another project prevents stale completion from replacing the visible model;
 6. a worker may finish committing valid content to its original project even when that project is no longer visible.
 
-The initial bootstrap implementation is idempotent and coarse-grained; later regional providers must add explicit coverage-key coalescing.
+Desktop now coalesces rapid navigation through a 120 ms quiet period and derives a deterministic detail tier plus focus-cell key from the latest visible geographic focus. This key is deliberately not an exact viewport polygon: it is an orchestration identity for deduplication. Regional providers that require full coverage must conservatively expand from the visible footprint rather than clip project geometry to the focus cell.
 
 ## 7. Failure and offline behavior
 
@@ -126,12 +126,14 @@ The current Desktop slice implements:
 - empty durable project as normal startup state;
 - viewport-demand callback separated from scene rendering;
 - automatic minimum-world acquisition/repair through that callback;
-- existing isolated-worker, cancellation, resume and project-identity safeguards.
+- existing isolated-worker, cancellation, resume and project-identity safeguards;
+- normalized detail tiers and deterministic focus-cell demand keys;
+- 120 ms latest-request coalescing;
+- same-project model refresh without resetting camera, zoom, pan or selected surface.
 
 Still pending:
 
-- geographic viewport footprint calculation suitable for provider queries;
-- provider-neutral coverage keys and coalescing;
+- exact/conservative geographic viewport footprint calculation suitable for provider queries;
 - 50m/10m vector detail providers;
 - regional/chunk-capable terrain provider;
 - durable coverage indexing where a provider requires more than the existing source/resource/layer model;

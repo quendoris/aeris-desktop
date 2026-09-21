@@ -5,6 +5,7 @@
 #include "aeris/storage/project.hpp"
 #include "project_model.hpp"
 #include "scene_controller.hpp"
+#include "viewport_data_demand.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 class QAction;
@@ -22,6 +24,7 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QWidget;
@@ -72,7 +75,8 @@ private:
     void close_project();
     void install_base_world();
     [[nodiscard]] bool needs_base_world_data() const noexcept;
-    void handle_viewport_data_demand();
+    void handle_viewport_data_demand(const ViewportDataDemand& demand);
+    void flush_viewport_data_demand();
     void import_world_data();
     void begin_data_job_ui(DataJobProcess* job, const QString& initial_phase);
     void finish_data_job_ui(DataJobProcess* job);
@@ -117,11 +121,14 @@ private:
     QAction* zoom_in_action_{nullptr};
     QAction* zoom_out_action_{nullptr};
     QAction* reset_view_action_{nullptr};
+    QTimer* viewport_data_demand_timer_{nullptr};
 
     std::unique_ptr<aeris::storage::ProjectStore> project_;
     std::shared_ptr<const ProjectModel> model_;
     SceneController scene_controller_;
     DataJobProcess* data_job_{nullptr};
+    std::optional<ViewportDataDemand> pending_viewport_data_demand_;
+    std::optional<ViewportCoverageKey> last_viewport_coverage_key_;
     std::map<std::filesystem::path, std::map<std::string, bool>> deferred_layer_visibility_;
     bool deferred_layer_visibility_flush_scheduled_{false};
     bool rebuilding_layers_{false};

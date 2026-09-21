@@ -8,6 +8,7 @@
 #include "elevation_renderer.hpp"
 #include "project_model.hpp"
 #include "scene_controller.hpp"
+#include "viewport_data_demand.hpp"
 
 #include <QPoint>
 #include <QPointF>
@@ -62,12 +63,7 @@ class MapView : public QWidget {
 public:
     using SceneRequestCallback = std::function<void(const view::SceneRequest&)>;
     using SurfaceProbeCallback = std::function<void(const SurfaceProbeResult&)>;
-    using ViewportDataDemandCallback = std::function<void(
-        view::SurfaceMode,
-        double,
-        double,
-        double,
-        double)>;
+    using ViewportDataDemandCallback = std::function<void(const ViewportDataDemand&)>;
 
     explicit MapView(QWidget* parent = nullptr);
 
@@ -215,6 +211,8 @@ private:
     };
 
     void request_scene(view::SceneQuality quality);
+    [[nodiscard]] std::optional<std::pair<double, double>> geographic_at_device(
+        QPointF device_position) const;
     void notify_viewport_data_demand();
     void begin_interactive_terrain();
     void end_interactive_terrain();
