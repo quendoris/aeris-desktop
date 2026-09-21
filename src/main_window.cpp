@@ -741,6 +741,10 @@ void MainWindow::flush_viewport_data_demand() {
     if (demand.detail_tier == ViewportDetailTier::local ||
         demand.detail_tier == ViewportDetailTier::fine) {
         if (request_streamed_etopo15(demand)) return;
+    } else {
+        // Zooming back out is also a deliberate departure from a failed tile
+        // request. A later zoom-in may therefore retry that cell.
+        blocked_streaming_tile_slot_.reset();
     }
 
     const ViewportCoverageKey key = viewport_coverage_key(demand);
