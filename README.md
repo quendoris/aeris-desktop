@@ -88,6 +88,14 @@ Use `File -> Open project…` and select `demo.aeris`.
 
 The map is rendered from the durable project source/layer model. Layer visibility changes in the Layers dock are acknowledged `.aeris` transactions rather than unsaved Qt state.
 
+## Automatic viewport terrain
+
+At local/fine zoom, Desktop can progressively materialize NOAA/NCEI ETOPO 2022 Surface terrain into the current mutable project. The first implementation requests exactly one official 15 arc-second 15°×15° GeoTIFF for the stable geographic focus after navigation settles.
+
+The download runs in the isolated data worker and uses the same safe resumable transport policy as the manual global ETOPO path. A completed 3600×3600 Float32 source tile is converted into canonical embedded AERIS elevation bytes and attached to one sparse global terrain layer. The acquisition TIFF is not a rendering dependency after that commit; its exact SHA-256, size and official retrieval URI remain recorded as optional source identity.
+
+This first slice intentionally fetches only the focus tile at a time. Expanding to every cell intersecting the visible viewport is the next provider step.
+
 ## Add NOAA ETOPO 2022 terrain
 
 AERIS supports both official NOAA/NCEI ETOPO 2022 v1 global 60 arc-second GeoTIFF variants:
