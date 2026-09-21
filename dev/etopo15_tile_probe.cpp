@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -80,7 +81,7 @@ void test_boundaries() {
 
 void test_invalid_input() {
     using namespace aeris::desktop;
-    const double nan = 0.0 / 0.0;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
     expect_true(
         "non-finite geographic focus is rejected",
         !etopo15_surface_tile_for_geographic(nan, 0.0).has_value()
