@@ -211,6 +211,8 @@ private:
     };
 
     void request_scene(view::SceneQuality quality);
+    [[nodiscard]] std::optional<std::pair<double, double>> geographic_at_device(
+        QPointF device_position) const;
     void notify_viewport_data_demand();
     void begin_interactive_terrain();
     void end_interactive_terrain();
