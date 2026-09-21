@@ -49,6 +49,18 @@ cmake -S . -B build \
 cmake --build build --target aeris-desktop aeris-demo-project --parallel
 ```
 
+## Startup and viewport-driven data lifecycle
+
+Normal startup does not require a prebuilt project or a manual dataset install. AERIS first creates/opens its application-owned local `.aeris` container, and an empty project is a valid durable state. The visible viewport then requests the minimum data it needs through a dedicated demand boundary; acquisition remains outside the renderer and Core stays network-free.
+
+The current first slice uses that boundary to acquire/repair the pinned Natural Earth base world automatically. Manual Natural Earth import is retained only as an advanced/offline fallback. This is intentionally the bootstrap tier, not the final streaming model.
+
+Higher-resolution vector and terrain acquisition must follow the same rule: request only immutable chunks needed for the current geographic coverage/resolution, verify them outside the UI process, then atomically materialize the canonical result into the same `.aeris`. We deliberately do **not** treat the current whole-world ETOPO GeoTIFF download as viewport streaming; regional terrain acquisition needs its own chunk-capable provider before it can become automatic.
+
+The application-owned project is created from zero on first use and then reused. It is not recreated on every launch: already acquired canonical chunks and user project state must survive restart and must not require the network again.
+
+See `docs/VIEWPORT-DATA-LIFECYCLE.md` for the implementation boundary and acceptance rules.
+
 ## Build a real demo `.aeris`
 
 The development fixture goes through the same verified Natural Earth adapters, canonical project bridge and durable layer-stack API as the product path. It does not manufacture SQLite rows directly.

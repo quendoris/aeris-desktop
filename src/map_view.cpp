@@ -556,6 +556,7 @@ void MapView::set_project(
     restore_active_viewport();
     update();
     request_scene(view::SceneQuality::verified);
+    notify_viewport_data_demand();
 }
 
 void MapView::set_project_model(
@@ -601,6 +602,12 @@ void MapView::set_surface_probe_callback(SurfaceProbeCallback callback) {
     surface_probe_callback_ = std::move(callback);
 }
 
+void MapView::set_viewport_data_demand_callback(
+    ViewportDataDemandCallback callback
+) {
+    viewport_data_demand_callback_ = std::move(callback);
+}
+
 void MapView::set_frame(RenderFrame frame) {
     if (!frame.ok) {
         frame_error_ = std::move(frame.diagnostic);
@@ -625,6 +632,7 @@ void MapView::set_surface_mode(const view::SurfaceMode mode) {
     restore_active_viewport();
     request_scene(view::SceneQuality::verified);
     update();
+    notify_viewport_data_demand();
 }
 
 void MapView::begin_interactive_terrain() {
@@ -669,6 +677,7 @@ void MapView::apply_zoom(const double factor, const QPointF& anchor) {
     viewport_pan_ = anchor - center - applied * (anchor - center - viewport_pan_);
     zoom_ = new_zoom;
     update();
+    notify_viewport_data_demand();
 }
 
 void MapView::zoom_in() {
@@ -692,6 +701,7 @@ void MapView::reset_viewport() {
     viewport_pan_ = {};
     store_active_viewport();
     update();
+    notify_viewport_data_demand();
 }
 
 std::optional<SurfaceProbeResult> MapView::surface_probe_at(
@@ -898,10 +908,10 @@ void MapView::paintEvent(QPaintEvent*) {
             content,
             Qt::AlignCenter | Qt::TextWordWrap,
             QStringLiteral(
-                "Empty AERIS project\n\n"
-                "The durable project is ready. Install the verified base world from:\n"
-                "Data → Install / repair base political world\n\n"
-                "A local Natural Earth snapshot is available only as an advanced/offline fallback."
+                "Local AERIS project created\n\n"
+                "The project is already durable. AERIS will acquire the minimum verified "
+                "world automatically from viewport demand and commit it into this .aeris.\n\n"
+                "Manual data import remains available only as an advanced/offline fallback."
             )
         );
         return;
@@ -1177,6 +1187,7 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
     if (mode_ == view::SurfaceMode::globe && moved) {
         request_scene(view::SceneQuality::verified);
     }
+    if (moved) notify_viewport_data_demand();
     if (probe_requested && surface_probe_callback_) {
         const auto probe = surface_probe_at(event->position());
         if (probe.has_value()) surface_probe_callback_(*probe);
@@ -1191,6 +1202,17 @@ void MapView::mouseDoubleClickEvent(QMouseEvent* event) {
     }
     apply_zoom(kDoubleClickZoomFactor, event->position());
     event->accept();
+}
+
+void MapView::notify_viewport_data_demand() {
+    if (!model_ || !viewport_data_demand_callback_) return;
+    viewport_data_demand_callback_(
+        mode_,
+        zoom_,
+        longitude_deg_,
+        latitude_deg_,
+        projection_central_meridian_deg_
+    );
 }
 
 void MapView::request_scene(const view::SceneQuality quality) {

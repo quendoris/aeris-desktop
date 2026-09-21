@@ -71,6 +71,8 @@ private:
     void open_project();
     void close_project();
     void install_base_world();
+    [[nodiscard]] bool needs_base_world_data() const noexcept;
+    void handle_viewport_data_demand();
     void import_world_data();
     void begin_data_job_ui(DataJobProcess* job, const QString& initial_phase);
     void finish_data_job_ui(DataJobProcess* job);

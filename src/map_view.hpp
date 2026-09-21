@@ -62,6 +62,12 @@ class MapView : public QWidget {
 public:
     using SceneRequestCallback = std::function<void(const view::SceneRequest&)>;
     using SurfaceProbeCallback = std::function<void(const SurfaceProbeResult&)>;
+    using ViewportDataDemandCallback = std::function<void(
+        view::SurfaceMode,
+        double,
+        double,
+        double,
+        double)>;
 
     explicit MapView(QWidget* parent = nullptr);
 
@@ -95,6 +101,7 @@ public:
     void prepare_shutdown() {
         scene_request_callback_ = {};
         surface_probe_callback_ = {};
+        viewport_data_demand_callback_ = {};
         if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
         terrain_interaction_active_ = false;
         elevation_detail_loader_.cancel();
@@ -105,6 +112,7 @@ public:
 
     void set_scene_request_callback(SceneRequestCallback callback);
     void set_surface_probe_callback(SurfaceProbeCallback callback);
+    void set_viewport_data_demand_callback(ViewportDataDemandCallback callback);
     [[nodiscard]] std::optional<SurfaceProbeResult> surface_probe_at(
         QPointF device_position) const;
     void set_frame(RenderFrame frame);
@@ -207,6 +215,7 @@ private:
     };
 
     void request_scene(view::SceneQuality quality);
+    void notify_viewport_data_demand();
     void begin_interactive_terrain();
     void end_interactive_terrain();
     void apply_zoom(double factor, const QPointF& anchor);
@@ -244,6 +253,7 @@ private:
     bool drag_moved_{false};
     SceneRequestCallback scene_request_callback_;
     SurfaceProbeCallback surface_probe_callback_;
+    ViewportDataDemandCallback viewport_data_demand_callback_;
 };
 
 }  // namespace aeris::desktop
