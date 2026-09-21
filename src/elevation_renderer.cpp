@@ -41,6 +41,9 @@ struct ParsedDetailBinding final {
     std::uint32_t resolution_arcsec{0U};
     std::uint32_t row{0U};
     std::uint32_t column{0U};
+    std::uint32_t grid_rows{0U};
+    std::uint32_t grid_columns{0U};
+    bool explicit_grid{false};
 };
 
 struct DetailGrid final {
@@ -74,10 +77,8 @@ struct DetailGrid final {
         return std::nullopt;
     }
 
-    const std::size_t resolution_end = slot.find("s:r", prefix.size());
+    const std::size_t resolution_end = slot.find("s:", prefix.size());
     if (resolution_end == std::string_view::npos) return std::nullopt;
-    const std::size_t column_marker = slot.find(":c", resolution_end + 3U);
-    if (column_marker == std::string_view::npos) return std::nullopt;
 
     ParsedDetailBinding parsed{};
     parsed.binding = &binding;
@@ -85,15 +86,55 @@ struct DetailGrid final {
             slot.substr(prefix.size(), resolution_end - prefix.size()),
             parsed.resolution_arcsec
         ) ||
+        parsed.resolution_arcsec == 0U) {
+        return std::nullopt;
+    }
+
+    const std::string_view tail = slot.substr(resolution_end + 2U);
+    if (tail.size() >= 2U && tail.front() == 'g') {
+        const std::size_t dimensions_x = tail.find('x', 1U);
+        const std::size_t row_marker = tail.find(":r", dimensions_x);
+        const std::size_t column_marker = tail.find(":c", row_marker);
+        if (dimensions_x == std::string_view::npos ||
+            row_marker == std::string_view::npos ||
+            column_marker == std::string_view::npos) {
+            return std::nullopt;
+        }
+        if (!parse_uint32(
+                tail.substr(1U, dimensions_x - 1U),
+                parsed.grid_rows
+            ) ||
+            !parse_uint32(
+                tail.substr(
+                    dimensions_x + 1U,
+                    row_marker - (dimensions_x + 1U)
+                ),
+                parsed.grid_columns
+            ) ||
+            !parse_uint32(
+                tail.substr(
+                    row_marker + 2U,
+                    column_marker - (row_marker + 2U)
+                ),
+                parsed.row
+            ) ||
+            !parse_uint32(tail.substr(column_marker + 2U), parsed.column) ||
+            parsed.grid_rows == 0U ||
+            parsed.grid_columns == 0U) {
+            return std::nullopt;
+        }
+        parsed.explicit_grid = true;
+        return parsed;
+    }
+
+    if (tail.empty() || tail.front() != 'r') return std::nullopt;
+    const std::size_t column_marker = tail.find(":c", 1U);
+    if (column_marker == std::string_view::npos ||
         !parse_uint32(
-            slot.substr(
-                resolution_end + 3U,
-                column_marker - (resolution_end + 3U)
-            ),
+            tail.substr(1U, column_marker - 1U),
             parsed.row
         ) ||
-        !parse_uint32(slot.substr(column_marker + 2U), parsed.column) ||
-        parsed.resolution_arcsec == 0U) {
+        !parse_uint32(tail.substr(column_marker + 2U), parsed.column)) {
         return std::nullopt;
     }
     return parsed;
@@ -118,19 +159,40 @@ struct DetailGrid final {
     if (parsed.empty()) return {};
 
     grid.resolution_arcsec = parsed.front().resolution_arcsec;
-    std::uint32_t max_row = 0U;
-    std::uint32_t max_column = 0U;
-    for (const ParsedDetailBinding& detail : parsed) {
-        if (detail.resolution_arcsec != grid.resolution_arcsec) return {};
-        max_row = std::max(max_row, detail.row);
-        max_column = std::max(max_column, detail.column);
+    const bool explicit_grid = parsed.front().explicit_grid;
+
+    if (explicit_grid) {
+        grid.rows = parsed.front().grid_rows;
+        grid.columns = parsed.front().grid_columns;
+        for (const ParsedDetailBinding& detail : parsed) {
+            if (!detail.explicit_grid ||
+                detail.resolution_arcsec != grid.resolution_arcsec ||
+                detail.grid_rows != grid.rows ||
+                detail.grid_columns != grid.columns ||
+                detail.row >= grid.rows ||
+                detail.column >= grid.columns) {
+                return {};
+            }
+        }
+    } else {
+        std::uint32_t max_row = 0U;
+        std::uint32_t max_column = 0U;
+        for (const ParsedDetailBinding& detail : parsed) {
+            if (detail.explicit_grid ||
+                detail.resolution_arcsec != grid.resolution_arcsec) {
+                return {};
+            }
+            max_row = std::max(max_row, detail.row);
+            max_column = std::max(max_column, detail.column);
+        }
+        if (max_row == std::numeric_limits<std::uint32_t>::max() ||
+            max_column == std::numeric_limits<std::uint32_t>::max()) {
+            return {};
+        }
+        grid.rows = max_row + 1U;
+        grid.columns = max_column + 1U;
     }
-    if (max_row == std::numeric_limits<std::uint32_t>::max() ||
-        max_column == std::numeric_limits<std::uint32_t>::max()) {
-        return {};
-    }
-    grid.rows = max_row + 1U;
-    grid.columns = max_column + 1U;
+
     if (grid.rows == 0U || grid.columns == 0U ||
         kWorldLongitudeMicroarcsec % static_cast<std::int64_t>(grid.columns) != 0LL ||
         kWorldLatitudeMicroarcsec % static_cast<std::int64_t>(grid.rows) != 0LL) {
@@ -140,7 +202,9 @@ struct DetailGrid final {
     const std::size_t expected =
         static_cast<std::size_t>(grid.rows) *
         static_cast<std::size_t>(grid.columns);
-    if (parsed.size() != expected) return {};
+    if (expected == 0U || expected > 1'000'000U) return {};
+    if (!explicit_grid && parsed.size() != expected) return {};
+
     grid.bindings.assign(expected, nullptr);
     for (const ParsedDetailBinding& detail : parsed) {
         const std::size_t index =
@@ -150,7 +214,9 @@ struct DetailGrid final {
         if (index >= grid.bindings.size() || grid.bindings[index] != nullptr) return {};
         grid.bindings[index] = detail.binding;
     }
-    if (std::any_of(
+
+    if (!explicit_grid &&
+        std::any_of(
             grid.bindings.begin(),
             grid.bindings.end(),
             [](const storage::LayerResourceBinding* binding) {
@@ -614,7 +680,7 @@ void rebuild_cache(
     const storage::ProjectLayerRecord& layer,
     const RenderFrame& frame,
     const ProjectModel& model,
-    const EmbeddedProjectResource& resource,
+    const EmbeddedProjectResource* resource,
     const double zoom,
     const QPointF pan,
     const bool interactive_quality,
@@ -717,11 +783,13 @@ void rebuild_cache(
                 if (pixel.has_value()) ++cache.detail_samples_used;
             }
             if (!pixel.has_value()) {
-                pixel = geographic_preview_pixel(
-                    resource,
-                    geographic.longitude_deg,
-                    geographic.latitude_deg
-                );
+                if (resource != nullptr) {
+                    pixel = geographic_preview_pixel(
+                        *resource,
+                        geographic.longitude_deg,
+                        geographic.latitude_deg
+                    );
+                }
             }
             if (pixel.has_value()) output[x] = *pixel;
         }
@@ -762,7 +830,12 @@ void draw_elevation_overview(
 ) {
     if (!layer.visible || layer.role_id != storage::kLayerRolePhysicalElevationV1) return;
     const EmbeddedProjectResource* resource = overview_resource(layer, model);
-    if (resource == nullptr) return;
+    const DetailGrid grid = detail_grid(layer);
+    const bool can_render_detail =
+        zoom >= kElevationDetailLodZoom &&
+        grid.valid &&
+        !model.project_path.empty();
+    if (resource == nullptr && !can_render_detail) return;
 
     const QRect viewport = painter.viewport();
     if (!cache_matches(
@@ -780,7 +853,7 @@ void draw_elevation_overview(
             layer,
             frame,
             model,
-            *resource,
+            resource,
             zoom,
             pan,
             interactive_quality,
