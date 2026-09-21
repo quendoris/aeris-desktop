@@ -908,10 +908,10 @@ void MapView::paintEvent(QPaintEvent*) {
             content,
             Qt::AlignCenter | Qt::TextWordWrap,
             QStringLiteral(
-                "Empty AERIS project\n\n"
-                "The durable project is ready. Install the verified base world from:\n"
-                "Data → Install / repair base political world\n\n"
-                "A local Natural Earth snapshot is available only as an advanced/offline fallback."
+                "Local AERIS project created\n\n"
+                "The project is already durable. AERIS will acquire the minimum verified "
+                "world automatically from viewport demand and commit it into this .aeris.\n\n"
+                "Manual data import remains available only as an advanced/offline fallback."
             )
         );
         return;
