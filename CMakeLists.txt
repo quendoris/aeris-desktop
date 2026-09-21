@@ -60,6 +60,7 @@ add_executable(aeris-desktop
     src/main_window_project_path.cpp
     src/main_window_shutdown.cpp
     src/main_window_startup.cpp
+    src/main_window_streaming_terrain.cpp
     src/main_window.hpp
     src/map_view.cpp
     src/map_view.hpp
