@@ -118,6 +118,11 @@ MainWindow::MainWindow(QWidget* parent)
                     QStringLiteral("Scene failed: %1")
                         .arg(QString::fromStdString(frame.diagnostic))
                 );
+            } else if (frame.degraded_geometry) {
+                statusBar()->showMessage(
+                    QStringLiteral("Partial map preview (NOT VERIFIED): %1")
+                        .arg(QString::fromStdString(frame.diagnostic))
+                );
             } else {
                 statusBar()->showMessage(
                     frame.request.quality == view::SceneQuality::verified
