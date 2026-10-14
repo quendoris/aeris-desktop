@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -684,15 +685,14 @@ void rebuild_cache(
     const double zoom,
     const QPointF pan,
     const bool interactive_quality,
-    ElevationSurfaceCache& cache
+    ElevationSurfaceCache& cache,
+    const bool restart
 ) {
     const QRect viewport = painter.viewport();
-    cache.detail_samples_used = 0U;
-    cache.raster_samples_used = 0U;
-    cache.detail_pending_resources.clear();
-    cache.detail_lod_active = false;
     if (viewport.width() <= 0 || viewport.height() <= 0) {
         cache.image = {};
+        cache.raster_samples_done = 0U;
+        cache.raster_samples_used = 0U;
         return;
     }
 
@@ -701,6 +701,8 @@ void rebuild_cache(
         painter.worldTransform().inverted(&invertible);
     if (!invertible) {
         cache.image = {};
+        cache.raster_samples_done = 0U;
+        cache.raster_samples_used = 0U;
         return;
     }
 
@@ -709,111 +711,150 @@ void rebuild_cache(
         zoom >= kElevationDetailLodZoom &&
         grid.valid &&
         !model.project_path.empty();
-    cache.detail_lod_active = use_detail;
-    if (use_detail) begin_detail_render_epoch(cache);
 
-    int block = use_detail
-        ? (zoom >= 8.0 ? 1 : 2)
-        : (zoom >= 3.0 ? 2 : 4);
-    const std::int64_t sample_budget = static_cast<std::int64_t>(
-        interactive_quality
-            ? (use_detail
-                ? kElevationInteractiveDetailRasterSampleBudget
-                : kElevationInteractiveOverviewRasterSampleBudget)
-            : (use_detail
-                ? kElevationFinalDetailRasterSampleBudget
-                : kElevationFinalOverviewRasterSampleBudget)
-    );
-    const auto sample_count_for_block = [&](const int candidate) noexcept {
-        const std::int64_t width =
-            (static_cast<std::int64_t>(viewport.width()) + candidate - 1LL) /
-            candidate;
-        const std::int64_t height =
-            (static_cast<std::int64_t>(viewport.height()) + candidate - 1LL) /
-            candidate;
-        return width * height;
-    };
-    while (sample_count_for_block(block) > sample_budget) {
-        ++block;
+    if (restart) {
+        cache.detail_samples_used = 0U;
+        cache.detail_pending_resources.clear();
+        cache.raster_samples_done = 0U;
+        cache.raster_last_pass_samples = 0U;
+        cache.detail_lod_active = use_detail;
+        if (use_detail) begin_detail_render_epoch(cache);
+
+        int block = use_detail
+            ? (zoom >= 8.0 ? 1 : 2)
+            : (zoom >= 3.0 ? 2 : 4);
+        const std::int64_t sample_budget = static_cast<std::int64_t>(
+            interactive_quality
+                ? (use_detail
+                    ? kElevationInteractiveDetailRasterSampleBudget
+                    : kElevationInteractiveOverviewRasterSampleBudget)
+                : (use_detail
+                    ? kElevationFinalDetailRasterSampleBudget
+                    : kElevationFinalOverviewRasterSampleBudget)
+        );
+        const auto sample_count_for_block = [&](const int candidate) noexcept {
+            const std::int64_t width =
+                (static_cast<std::int64_t>(viewport.width()) + candidate - 1LL) /
+                candidate;
+            const std::int64_t height =
+                (static_cast<std::int64_t>(viewport.height()) + candidate - 1LL) /
+                candidate;
+            return width * height;
+        };
+        while (sample_count_for_block(block) > sample_budget) ++block;
+
+        const int sample_width =
+            std::max(1, (viewport.width() + block - 1) / block);
+        const int sample_height =
+            std::max(1, (viewport.height() + block - 1) / block);
+        cache.image = QImage(
+            sample_width,
+            sample_height,
+            QImage::Format_ARGB32_Premultiplied
+        );
+        if (cache.image.isNull()) {
+            cache.raster_samples_used = 0U;
+            return;
+        }
+        cache.image.fill(Qt::transparent);
+        cache.raster_samples_used =
+            static_cast<std::size_t>(sample_width) *
+            static_cast<std::size_t>(sample_height);
+
+        cache.model = &model;
+        cache.layer_id = layer.layer_id;
+        cache.mode = frame.request.mode;
+        cache.camera_longitude_deg = frame.request.camera_longitude_deg;
+        cache.camera_latitude_deg = frame.request.camera_latitude_deg;
+        cache.projection_central_meridian_deg =
+            frame.request.projection_central_meridian_deg;
+        cache.zoom = zoom;
+        cache.pan = pan;
+        cache.interactive_quality = interactive_quality;
+        cache.width = viewport.width();
+        cache.height = viewport.height();
     }
 
-    const int sample_width = std::max(1, (viewport.width() + block - 1) / block);
-    const int sample_height = std::max(1, (viewport.height() + block - 1) / block);
-    cache.raster_samples_used =
-        static_cast<std::size_t>(sample_width) *
-        static_cast<std::size_t>(sample_height);
-    QImage image(sample_width, sample_height, QImage::Format_ARGB32_Premultiplied);
-    if (image.isNull()) {
-        cache.image = {};
+    if (cache.image.isNull() ||
+        cache.raster_samples_done >= cache.raster_samples_used) {
+        cache.raster_last_pass_samples = 0U;
         return;
     }
-    image.fill(Qt::transparent);
 
+    const std::size_t total = cache.raster_samples_used;
+    const int sample_width = cache.image.width();
+    const int sample_height = cache.image.height();
     const double device_step_x =
         static_cast<double>(viewport.width()) / static_cast<double>(sample_width);
     const double device_step_y =
         static_cast<double>(viewport.height()) / static_cast<double>(sample_height);
 
-    for (int y = 0; y < sample_height; ++y) {
-        auto* output = reinterpret_cast<QRgb*>(image.scanLine(y));
+    // A coprime stride scatters the early samples across the whole image
+    // instead of painting a blocking full-screen scan from top to bottom.
+    // Every pixel is visited exactly once; no approximation is silently
+    // declared final before its own inversion/sampling has completed.
+    std::size_t stride = std::max<std::size_t>(
+        1U, (total * 618U) / 1000U
+    );
+    while (std::gcd(stride, total) != 1U) ++stride;
+
+    const std::size_t start_sample = cache.raster_samples_done;
+    const std::size_t end_sample = std::min(
+        total, start_sample + kElevationRasterSamplesPerPaint
+    );
+    for (std::size_t sample_index = start_sample;
+         sample_index < end_sample; ++sample_index) {
+        const std::size_t position = (sample_index * stride) % total;
+        const int y = static_cast<int>(
+            position / static_cast<std::size_t>(sample_width)
+        );
+        const int x = static_cast<int>(
+            position % static_cast<std::size_t>(sample_width)
+        );
+        auto* output = reinterpret_cast<QRgb*>(cache.image.scanLine(y));
         const double device_y = static_cast<double>(viewport.top()) +
             (static_cast<double>(y) + 0.5) * device_step_y;
-        for (int x = 0; x < sample_width; ++x) {
-            const double device_x = static_cast<double>(viewport.left()) +
-                (static_cast<double>(x) + 0.5) * device_step_x;
-            const QPointF surface = device_to_surface.map(QPointF(device_x, device_y));
-            const view::SurfaceGeographicPickResult geographic =
-                view::pick_geographic_from_surface(
-                    frame.request.mode,
-                    {surface.x(), surface.y()},
-                    frame.request.camera_longitude_deg,
-                    frame.request.camera_latitude_deg,
-                    frame.request.projection_central_meridian_deg
-                );
-            if (!geographic.ok) continue;
+        const double device_x = static_cast<double>(viewport.left()) +
+            (static_cast<double>(x) + 0.5) * device_step_x;
+        const QPointF surface =
+            device_to_surface.map(QPointF(device_x, device_y));
+        const view::SurfaceGeographicPickResult geographic =
+            view::pick_geographic_from_surface(
+                frame.request.mode,
+                {surface.x(), surface.y()},
+                frame.request.camera_longitude_deg,
+                frame.request.camera_latitude_deg,
+                frame.request.projection_central_meridian_deg
+            );
+        if (!geographic.ok) continue;
 
-            std::optional<QRgb> pixel;
-            if (use_detail) {
-                pixel = geographic_detail_pixel(
-                    grid,
-                    geographic.longitude_deg,
-                    geographic.latitude_deg,
-                    cache
-                );
-                if (pixel.has_value()) ++cache.detail_samples_used;
-            }
-            if (!pixel.has_value()) {
-                if (resource != nullptr) {
-                    pixel = geographic_preview_pixel(
-                        *resource,
-                        geographic.longitude_deg,
-                        geographic.latitude_deg
-                    );
-                }
-            }
-            if (pixel.has_value()) output[x] = *pixel;
+        std::optional<QRgb> pixel;
+        if (use_detail) {
+            pixel = geographic_detail_pixel(
+                grid,
+                geographic.longitude_deg,
+                geographic.latitude_deg,
+                cache
+            );
+            if (pixel.has_value()) ++cache.detail_samples_used;
         }
+        if (!pixel.has_value() && resource != nullptr) {
+            pixel = geographic_preview_pixel(
+                *resource,
+                geographic.longitude_deg,
+                geographic.latitude_deg
+            );
+        }
+        if (pixel.has_value()) output[x] = *pixel;
     }
+    cache.raster_samples_done = end_sample;
+    cache.raster_last_pass_samples = end_sample - start_sample;
 
     if (use_detail) {
         trim_detail_requests_to_cache_budget(cache);
     } else {
         cache.detail_pending_resources.clear();
     }
-
-    cache.model = &model;
-    cache.layer_id = layer.layer_id;
-    cache.mode = frame.request.mode;
-    cache.camera_longitude_deg = frame.request.camera_longitude_deg;
-    cache.camera_latitude_deg = frame.request.camera_latitude_deg;
-    cache.projection_central_meridian_deg =
-        frame.request.projection_central_meridian_deg;
-    cache.zoom = zoom;
-    cache.pan = pan;
-    cache.interactive_quality = interactive_quality;
-    cache.width = viewport.width();
-    cache.height = viewport.height();
-    cache.image = std::move(image);
 }
 
 }  // namespace
@@ -838,16 +879,33 @@ void draw_elevation_overview(
     if (resource == nullptr && !can_render_detail) return;
 
     const QRect viewport = painter.viewport();
-    if (!cache_matches(
-            cache,
-            model,
-            layer,
-            frame,
-            zoom,
-            pan,
-            interactive_quality,
-            viewport
-        )) {
+    const bool restart = !cache_matches(
+        cache,
+        model,
+        layer,
+        frame,
+        zoom,
+        pan,
+        interactive_quality,
+        viewport
+    );
+    if (restart) {
+        // The previous image is only meaningful under the same exact
+        // projection/camera/zoom/pan/viewport transform.
+        if (cache.mode != frame.request.mode ||
+            cache.camera_longitude_deg != frame.request.camera_longitude_deg ||
+            cache.camera_latitude_deg != frame.request.camera_latitude_deg ||
+            cache.projection_central_meridian_deg !=
+                frame.request.projection_central_meridian_deg ||
+            cache.zoom != zoom || cache.pan != pan ||
+            cache.width != viewport.width() ||
+            cache.height != viewport.height()) {
+            cache.previous_image = {};
+        }
+    }
+    if (restart ||
+        (!cache.image.isNull() &&
+         cache.raster_samples_done < cache.raster_samples_used)) {
         rebuild_cache(
             painter,
             layer,
@@ -857,7 +915,8 @@ void draw_elevation_overview(
             zoom,
             pan,
             interactive_quality,
-            cache
+            cache,
+            restart
         );
     }
     if (cache.image.isNull()) return;
@@ -869,8 +928,18 @@ void draw_elevation_overview(
     // Multiply preserves the hue selected by durable land/water/ice semantics
     // while the neutral grayscale raster contributes only hillshade.
     painter.setCompositionMode(QPainter::CompositionMode_Multiply);
-    painter.drawImage(QRectF(viewport), cache.image);
+    // Multiply exactly once. Drawing both rasters would darken already
+    // sampled pixels twice and corrupt water/land material presentation.
+    if (cache.raster_samples_done < cache.raster_samples_used &&
+        !cache.previous_image.isNull()) {
+        painter.drawImage(QRectF(viewport), cache.previous_image);
+    } else {
+        painter.drawImage(QRectF(viewport), cache.image);
+    }
     painter.restore();
+    if (cache.raster_samples_done == cache.raster_samples_used) {
+        cache.previous_image = {};
+    }
 }
 
 ElevationProbeSample probe_elevation_at_geographic(
