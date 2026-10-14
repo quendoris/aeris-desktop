@@ -43,36 +43,14 @@ struct Etopo15SurfaceTileDescriptor final {
 }
 
 [[nodiscard]] inline std::optional<Etopo15SurfaceTileDescriptor>
-etopo15_surface_tile_for_geographic(
-    double longitude_deg,
-    double latitude_deg
+etopo15_surface_tile_for_indices(
+    const std::uint32_t row,
+    const std::uint32_t column
 ) {
-    if (!std::isfinite(longitude_deg) || !std::isfinite(latitude_deg)) {
+    if (row >= kEtopo15SurfaceGridRows ||
+        column >= kEtopo15SurfaceGridColumns) {
         return std::nullopt;
     }
-
-    longitude_deg = std::fmod(longitude_deg + 180.0, 360.0);
-    if (longitude_deg < 0.0) longitude_deg += 360.0;
-    longitude_deg -= 180.0;
-    latitude_deg = std::clamp(latitude_deg, -90.0, 90.0);
-
-    const double raw_column = std::floor(
-        (longitude_deg + 180.0) / static_cast<double>(kEtopo15TileSpanDegrees)
-    );
-    const double raw_row = std::floor(
-        (90.0 - latitude_deg) / static_cast<double>(kEtopo15TileSpanDegrees)
-    );
-
-    const auto column = static_cast<std::uint32_t>(std::clamp(
-        raw_column,
-        0.0,
-        static_cast<double>(kEtopo15SurfaceGridColumns - 1U)
-    ));
-    const auto row = static_cast<std::uint32_t>(std::clamp(
-        raw_row,
-        0.0,
-        static_cast<double>(kEtopo15SurfaceGridRows - 1U)
-    ));
 
     const int north = 90 -
         static_cast<int>(row) * kEtopo15TileSpanDegrees;
@@ -111,6 +89,39 @@ etopo15_surface_tile_for_geographic(
         ":c" +
         std::to_string(column);
     return descriptor;
+}
+
+[[nodiscard]] inline std::optional<Etopo15SurfaceTileDescriptor>
+etopo15_surface_tile_for_geographic(
+    double longitude_deg,
+    double latitude_deg
+) {
+    if (!std::isfinite(longitude_deg) || !std::isfinite(latitude_deg)) {
+        return std::nullopt;
+    }
+
+    longitude_deg = std::fmod(longitude_deg + 180.0, 360.0);
+    if (longitude_deg < 0.0) longitude_deg += 360.0;
+    longitude_deg -= 180.0;
+    latitude_deg = std::clamp(latitude_deg, -90.0, 90.0);
+
+    const auto column = static_cast<std::uint32_t>(std::clamp(
+        std::floor(
+            (longitude_deg + 180.0) /
+            static_cast<double>(kEtopo15TileSpanDegrees)
+        ),
+        0.0,
+        static_cast<double>(kEtopo15SurfaceGridColumns - 1U)
+    ));
+    const auto row = static_cast<std::uint32_t>(std::clamp(
+        std::floor(
+            (90.0 - latitude_deg) /
+            static_cast<double>(kEtopo15TileSpanDegrees)
+        ),
+        0.0,
+        static_cast<double>(kEtopo15SurfaceGridRows - 1U)
+    ));
+    return etopo15_surface_tile_for_indices(row, column);
 }
 
 }  // namespace aeris::desktop
