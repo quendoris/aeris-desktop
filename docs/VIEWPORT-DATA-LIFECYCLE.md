@@ -59,6 +59,8 @@ Higher detail must not copy the bootstrap strategy blindly.
 
 In particular, entering a zoom threshold must **not** automatically download the existing full global ETOPO GeoTIFF. That is a whole-dataset importer, not viewport streaming.
 
+The first real terrain provider now uses the official NOAA/NCEI ETOPO 2022 15 arc-second Surface distribution: one immutable 15°×15° GeoTIFF is selected from the stable geographic focus at local/fine zoom. The worker downloads only that cell, structurally verifies the 3600×3600 Float32 grid, converts it to canonical AERIS elevation bytes, and binds the resulting resource into one sparse global 12×24 terrain layer. The source GeoTIFF remains transport/provenance only and may be deleted after materialization.
+
 Future providers should expose immutable geographic chunks that can be requested by coverage and target resolution. Examples of logical tiers are:
 
 - low-resolution world overview;
@@ -133,8 +135,8 @@ The current Desktop slice implements:
 
 Still pending:
 
-- exact/conservative geographic viewport footprint calculation suitable for provider queries;
+- exact/conservative geographic viewport footprint calculation suitable for provider queries, so terrain expands to every visible 15° cell rather than only the stable focus cell;
 - 50m/10m vector detail providers;
-- regional/chunk-capable terrain provider;
+- multi-cell terrain scheduling/priorities beyond the first focus-tile provider;
 - durable coverage indexing where a provider requires more than the existing source/resource/layer model;
 - eviction/storage-budget UX, if AERIS later permits selectively non-durable online caches.
