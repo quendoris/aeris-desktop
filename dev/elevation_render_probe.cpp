@@ -58,6 +58,7 @@ struct RenderProof final {
     std::size_t initial_raster_samples_used{0U};
     bool interactive_quality{false};
     bool initial_interactive_quality{false};
+    bool same_project_refresh_retains_frame_and_tiles{false};
     double zoom{1.0};
     std::optional<aeris::desktop::SurfaceProbeResult> center_probe;
 };
@@ -116,6 +117,7 @@ struct RenderProof final {
     const bool detail_zoom
 ) {
     aeris::desktop::MapView view;
+    const auto model_for_refresh = model;
     view.resize(960, 640);
     view.set_project(std::move(model), project_uuid, revision);
     if (frame.request.mode != aeris::view::SurfaceMode::globe) {
@@ -184,6 +186,21 @@ struct RenderProof final {
         static_cast<double>(view.width()) * 0.5,
         static_cast<double>(view.height()) * 0.5
     ));
+    if (detail_zoom) {
+        // Simulate an isolated worker committing a new tile into the SAME
+        // .aeris: fresh immutable ProjectModel pointer, unchanged canonical
+        // source identities. Previously every such refresh dropped both the
+        // ready Globe frame and all decoded elevation tiles.
+        const auto refreshed = std::make_shared<aeris::desktop::ProjectModel>(
+            *model_for_refresh
+        );
+        view.set_project_model(refreshed, revision + 1U);
+        proof.same_project_refresh_retains_frame_and_tiles =
+            view.has_current_frame() &&
+            view.elevation_detail_cached_tiles() == proof.detail_cached_tiles &&
+            view.elevation_detail_tile_loads() == proof.detail_tile_loads &&
+            view.zoom_factor() == proof.zoom;
+    }
     view.hide();
     application.processEvents();
     return proof;
@@ -318,7 +335,8 @@ struct RenderProof final {
         return false;
     }
 
-    if (!detail.detail_lod_active ||
+    if (!detail.same_project_refresh_retains_frame_and_tiles ||
+        !detail.detail_lod_active ||
         detail.zoom < aeris::desktop::kElevationDetailLodZoom ||
         detail.detail_cached_tiles == 0U ||
         detail.detail_cached_tiles > aeris::desktop::kElevationDetailCacheTileLimit ||
