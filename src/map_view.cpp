@@ -505,6 +505,15 @@ MapView::MapView(QWidget* parent)
         this,
         [this]() { end_interactive_terrain(); }
     );
+    terrain_raster_timer_ = new QTimer(this);
+    terrain_raster_timer_->setSingleShot(true);
+    terrain_raster_timer_->setInterval(8);
+    connect(
+        terrain_raster_timer_,
+        &QTimer::timeout,
+        this,
+        [this]() { update(); }
+    );
     setMinimumSize(720, 480);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -540,6 +549,7 @@ void MapView::set_project(
     const std::uint64_t revision
 ) {
     if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    if (terrain_raster_timer_ != nullptr) terrain_raster_timer_->stop();
     terrain_interaction_active_ = false;
     elevation_detail_loader_.cancel();
     model_ = std::move(model);
@@ -580,6 +590,7 @@ void MapView::set_project_model(
     }
 
     if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    if (terrain_raster_timer_ != nullptr) terrain_raster_timer_->stop();
     terrain_interaction_active_ = false;
     if (!same_canonical_sources) {
         elevation_detail_loader_.cancel();
@@ -588,7 +599,12 @@ void MapView::set_project_model(
         frame_error_.clear();
     } else {
         // Keep the bounded decoded tile LRU (resource IDs are immutable).
-        // Rebuild only the screen raster using the newly available bindings.
+        // Retain a completed lower-quality raster during the next refinement.
+        if (!elevation_surface_cache_.image.isNull() &&
+            elevation_raster_complete()) {
+            elevation_surface_cache_.previous_image =
+                elevation_surface_cache_.image;
+        }
         elevation_surface_cache_.model = nullptr;
         elevation_surface_cache_.image = {};
         elevation_surface_cache_.detail_pending_resources.clear();
@@ -606,6 +622,7 @@ void MapView::set_project_model(
 
 void MapView::clear_project() {
     if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    if (terrain_raster_timer_ != nullptr) terrain_raster_timer_->stop();
     terrain_interaction_active_ = false;
     elevation_detail_loader_.cancel();
     model_.reset();
@@ -674,11 +691,17 @@ void MapView::begin_interactive_terrain() {
 
 void MapView::end_interactive_terrain() {
     if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+    if (terrain_raster_timer_ != nullptr) terrain_raster_timer_->stop();
     if (!terrain_interaction_active_) return;
     terrain_interaction_active_ = false;
 
-    // Keep decoded detail tiles; only the projection raster is preview-quality.
-    // Clearing it forces one final-quality rebuild after interaction settles.
+    // The previous interactive raster remains a valid lower-quality
+    // presentation of the same viewport. Keep it on screen until the
+    // higher-resolution raster has finished in bounded paint slices.
+    if (!elevation_surface_cache_.image.isNull() &&
+        elevation_raster_complete()) {
+        elevation_surface_cache_.previous_image = elevation_surface_cache_.image;
+    }
     elevation_surface_cache_.image = {};
     update();
 }
@@ -1000,10 +1023,14 @@ void MapView::paintEvent(QPaintEvent*) {
                 }
             }
 
+            bool elevation_layer_drawn = false;
             for (auto layer_it = model_->layers.rbegin();
                  layer_it != model_->layers.rend(); ++layer_it) {
                 const storage::ProjectLayerRecord& layer = *layer_it;
                 if (!layer.visible) continue;
+                if (layer.role_id == storage::kLayerRolePhysicalElevationV1) {
+                    elevation_layer_drawn = true;
+                }
 
                 // Numerical elevation participates in the same durable layer
                 // stack as vector content. This call is pure presentation: it
@@ -1040,6 +1067,16 @@ void MapView::paintEvent(QPaintEvent*) {
                 }
             }
             dispatch_elevation_detail_requests();
+            if (elevation_layer_drawn &&
+                elevation_raster_samples_used() > 0U &&
+                !elevation_raster_complete() &&
+                terrain_raster_timer_ != nullptr &&
+                !terrain_raster_timer_->isActive()) {
+                // Each queued continuation is another bounded paint pass.
+                // Navigation or project change invalidates the old cache
+                // and cancels the pending continuation immediately.
+                terrain_raster_timer_->start();
+            }
         }
     }
 

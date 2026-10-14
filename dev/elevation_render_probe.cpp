@@ -41,6 +41,7 @@ constexpr std::size_t kMinimumSemanticChangedPixels = 64U;
 constexpr std::size_t kMinimumDetailSamples = 1000U;
 constexpr qint64 kDetailWorkerProofTimeoutMs = 10000;
 constexpr qint64 kTerrainRefineProofTimeoutMs = 1000;
+constexpr qint64 kTerrainRasterProofTimeoutMs = 15000;
 
 struct RenderProof final {
     QImage image;
@@ -56,6 +57,8 @@ struct RenderProof final {
     bool initial_loader_busy{false};
     std::size_t raster_samples_used{0U};
     std::size_t initial_raster_samples_used{0U};
+    std::size_t initial_raster_last_pass_samples{0U};
+    bool final_raster_complete{false};
     bool interactive_quality{false};
     bool initial_interactive_quality{false};
     bool same_project_refresh_retains_frame_and_tiles{false};
@@ -146,6 +149,8 @@ struct RenderProof final {
     proof.initial_pending_resources = view.elevation_detail_pending_resources();
     proof.initial_loader_busy = view.elevation_detail_loader_busy();
     proof.initial_raster_samples_used = view.elevation_raster_samples_used();
+    proof.initial_raster_last_pass_samples =
+        view.elevation_raster_last_pass_samples();
     proof.initial_interactive_quality = view.elevation_interactive_quality();
 
     if (detail_zoom && proof.initial_loader_busy) {
@@ -172,6 +177,22 @@ struct RenderProof final {
         application.processEvents();
         proof.image = render_view(view);
     }
+
+    if (!view.elevation_raster_complete()) {
+        // Refinement is incremental and never monopolizes one paint event.
+        // Wait for queued 768-sample passes without turning the test itself
+        // into a single blocking raster computation.
+        QElapsedTimer raster_timer;
+        raster_timer.start();
+        while (!view.elevation_raster_complete() &&
+               raster_timer.elapsed() < kTerrainRasterProofTimeoutMs) {
+            application.processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1UL);
+        }
+        application.processEvents();
+        proof.image = render_view(view);
+    }
+    proof.final_raster_complete = view.elevation_raster_complete();
 
     proof.detail_lod_active = view.elevation_detail_lod_active();
     proof.detail_cached_tiles = view.elevation_detail_cached_tiles();
@@ -322,7 +343,10 @@ struct RenderProof final {
         !detail.initial_interactive_quality ||
         detail.initial_raster_samples_used == 0U ||
         detail.initial_raster_samples_used >
-            aeris::desktop::kElevationInteractiveDetailRasterSampleBudget) {
+            aeris::desktop::kElevationInteractiveDetailRasterSampleBudget ||
+        detail.initial_raster_last_pass_samples == 0U ||
+        detail.initial_raster_last_pass_samples >
+            aeris::desktop::kElevationRasterSamplesPerPaint) {
         std::cerr
             << aeris::view::surface_mode_name(mode)
             << " high-zoom paint did not stay I/O-free: initial_loads="
@@ -336,6 +360,7 @@ struct RenderProof final {
     }
 
     if (!detail.same_project_refresh_retains_frame_and_tiles ||
+        !detail.final_raster_complete ||
         !detail.detail_lod_active ||
         detail.zoom < aeris::desktop::kElevationDetailLodZoom ||
         detail.detail_cached_tiles == 0U ||

@@ -34,6 +34,12 @@ inline constexpr std::size_t kElevationFinalDetailRasterSampleBudget = 32768U;
 inline constexpr std::size_t kElevationInteractiveOverviewRasterSampleBudget = 8192U;
 inline constexpr std::size_t kElevationInteractiveDetailRasterSampleBudget = 4096U;
 
+// Maximal geographical inversions performed in one GUI paint. The completed
+// image may use the full raster budget, but is composed in short, cancellable
+// event-loop slices so navigation and window close never inherit a monolithic
+// 32K/65K-sample compute loop.
+inline constexpr std::size_t kElevationRasterSamplesPerPaint = 768U;
+
 struct ElevationDetailTileCacheEntry final {
     std::string resource_id;
     elevation::ElevationTile tile;
@@ -53,6 +59,9 @@ struct ElevationSurfaceCache final {
     int width{0};
     int height{0};
     QImage image;
+    // Last complete/interactive raster for the same exact surface transform.
+    // A fine refinement composes over it while the next image is incomplete.
+    QImage previous_image;
 
     // The UI thread owns only decoded tiles already delivered by the background
     // loader. paintEvent never opens ProjectStore or streams SQLite blobs. A
@@ -67,6 +76,8 @@ struct ElevationSurfaceCache final {
     std::size_t detail_tile_loads{0U};
     std::size_t detail_samples_used{0U};
     std::size_t raster_samples_used{0U};
+    std::size_t raster_samples_done{0U};
+    std::size_t raster_last_pass_samples{0U};
     bool detail_lod_active{false};
     bool interactive_quality{false};
 };

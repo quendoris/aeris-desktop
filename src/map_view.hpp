@@ -99,6 +99,7 @@ public:
         surface_probe_callback_ = {};
         viewport_data_demand_callback_ = {};
         if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
+        if (terrain_raster_timer_ != nullptr) terrain_raster_timer_->stop();
         terrain_interaction_active_ = false;
         elevation_detail_loader_.cancel();
         setUpdatesEnabled(false);
@@ -145,6 +146,14 @@ public:
     }
     [[nodiscard]] std::size_t elevation_raster_samples_used() const noexcept {
         return elevation_surface_cache_.raster_samples_used;
+    }
+    [[nodiscard]] std::size_t elevation_raster_last_pass_samples() const noexcept {
+        return elevation_surface_cache_.raster_last_pass_samples;
+    }
+    [[nodiscard]] bool elevation_raster_complete() const noexcept {
+        return elevation_surface_cache_.raster_samples_used == 0U ||
+            elevation_surface_cache_.raster_samples_done ==
+                elevation_surface_cache_.raster_samples_used;
     }
     [[nodiscard]] bool elevation_interactive_quality() const noexcept {
         return elevation_surface_cache_.interactive_quality;
@@ -243,6 +252,7 @@ private:
     ElevationSurfaceCache elevation_surface_cache_{};
     ElevationDetailLoader elevation_detail_loader_;
     QTimer* terrain_refine_timer_{nullptr};
+    QTimer* terrain_raster_timer_{nullptr};
     bool terrain_interaction_active_{false};
 
     QPoint last_mouse_{};
