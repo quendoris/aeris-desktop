@@ -1034,7 +1034,7 @@ void MainWindow::import_world_data() {
 bool MainWindow::load_render_model() {
     if (!project_) return false;
 
-    ProjectModelLoadResult loaded = load_project_model(*project_);
+    ProjectModelLoadResult loaded = load_project_model(*project_, model_);
     if (!loaded.ok()) {
         QMessageBox::critical(
             this,
