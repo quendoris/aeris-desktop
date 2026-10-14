@@ -141,6 +141,22 @@ At whole-world scale the renderer uses the overview. At roughly `3x` zoom and ab
 - Physical/political presentation is layer composition, not an application mode switch; semantic surface material, political geometry, and labels remain separate from the numerical elevation channel.
 - Developer Inspector is hidden by default.
 
+## Diagnostic paint timing on Arch
+
+During a manual performance run, set `AERIS_PERF_HUD=1` when launching
+`aeris-desktop`. The top-right overlay displays elapsed **GUI paint**
+milliseconds (not network or overall frame latency), elevation samples
+computed in the most recent paint (limited by
+`kElevationRasterSamplesPerPaint`), accumulated raster completion, decoded
+detail-tile count, and pending tile-resource requests.
+
+The overlay is disabled by default; it never opens storage, affects source
+verification, or changes the durable `.aeris`. Compare one cold viewport load
+against revisiting the same region from the same project; capture a screenshot
+with the overlay and note whether the lag happens during download, geometry
+verification, or after raster completion. A low paint time does not prove
+responsive navigation: other event-loop work can also block the GUI.
+
 ## Manual terrain pass
 
 Useful things to inspect while exercising the real ETOPO build:
