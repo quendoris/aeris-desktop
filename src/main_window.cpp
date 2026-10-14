@@ -118,6 +118,11 @@ MainWindow::MainWindow(QWidget* parent)
                     QStringLiteral("Scene failed: %1")
                         .arg(QString::fromStdString(frame.diagnostic))
                 );
+            } else if (frame.degraded_geometry) {
+                statusBar()->showMessage(
+                    QStringLiteral("Partial map preview (NOT VERIFIED): %1")
+                        .arg(QString::fromStdString(frame.diagnostic))
+                );
             } else {
                 statusBar()->showMessage(
                     frame.request.quality == view::SceneQuality::verified
@@ -187,6 +192,41 @@ void MainWindow::build_ui() {
         this,
         &MainWindow::import_world_data
     );
+
+    // Progressive viewport acquisition stays automatic. This menu is an
+    // explicit opt-in for datasets or repair that should never be triggered
+    // merely by moving the camera.
+    auto* additional_data_menu = data_menu->addMenu(
+        QStringLiteral("Загрузить дополнительно…")
+    );
+    additional_data_menu->setObjectName(QStringLiteral("additionalDataMenu"));
+    auto* additional_terrain = additional_data_menu->addAction(
+        QStringLiteral("Рельеф ETOPO 2022: Surface / Bedrock / локальный TIFF…")
+    );
+    additional_terrain->setToolTip(QStringLiteral(
+        "Выбрать глобальный вариант рельефа или импортировать свой файл. "
+        "Автоматическая региональная подкачка остаётся независимой."
+    ));
+    connect(additional_terrain, &QAction::triggered,
+            this, &MainWindow::import_etopo_elevation);
+
+    auto* additional_flags = additional_data_menu->addAction(
+        QStringLiteral("Флаги стран: локальный набор PNG…")
+    );
+    connect(additional_flags, &QAction::triggered,
+            this, &MainWindow::import_country_flags);
+
+    additional_data_menu->addSeparator();
+    auto* additional_base = additional_data_menu->addAction(
+        QStringLiteral("Восстановить базовую карту стран…")
+    );
+    connect(additional_base, &QAction::triggered,
+            this, &MainWindow::install_base_world);
+    auto* additional_local = additional_data_menu->addAction(
+        QStringLiteral("Импорт Natural Earth из каталога…")
+    );
+    connect(additional_local, &QAction::triggered,
+            this, &MainWindow::import_world_data);
 
     auto* tools_menu = menuBar()->addMenu(QStringLiteral("&Tools"));
     auto* navigate_action = tools_menu->addAction(QStringLiteral("Navigate"));
@@ -994,7 +1034,7 @@ void MainWindow::import_world_data() {
 bool MainWindow::load_render_model() {
     if (!project_) return false;
 
-    ProjectModelLoadResult loaded = load_project_model(*project_);
+    ProjectModelLoadResult loaded = load_project_model(*project_, model_);
     if (!loaded.ok()) {
         QMessageBox::critical(
             this,

@@ -53,9 +53,15 @@ void MainWindow::import_country_flags() {
         return;
     }
 
+    // Use Qt's own non-native directory dialog. On some Wayland portal
+    // implementations, transferring a native folder picker between an active
+    // offscreen/worker-updated window and the portal can terminate the client.
+    // This action is optional and must never be a mandatory acquisition path.
     const QString selected = QFileDialog::getExistingDirectory(
         this,
-        QStringLiteral("Select local ISO country flag PNG pack")
+        QStringLiteral("Select local ISO country flag PNG pack"),
+        {},
+        QFileDialog::ShowDirsOnly | QFileDialog::DontUseNativeDialog
     );
     if (selected.isEmpty()) return;
 

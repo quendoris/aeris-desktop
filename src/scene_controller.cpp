@@ -48,6 +48,31 @@ public:
                 [token]() { return token->load(std::memory_order_relaxed); }
             );
             if (scene.canceled || token->load(std::memory_order_relaxed)) return;
+            if (!scene.ok && request_.mode == view::SurfaceMode::globe &&
+                request_.quality == view::SceneQuality::verified) {
+                // An explicitly non-authoritative presentation fallback:
+                // Core's strict geometric verifier still fails closed. Only
+                // the offending source is redrawn with the already documented
+                // interactive preview projector so a polar numerical edge case
+                // cannot blank every other verified country/land layer.
+                const std::string strict_diagnostic = scene.diagnostic;
+                view::SceneRequest preview_request = request_;
+                preview_request.quality = view::SceneQuality::preview;
+                view::SceneGeometry preview = view::build_scene_geometry(
+                    *entry.second,
+                    preview_request,
+                    [token]() { return token->load(std::memory_order_relaxed); }
+                );
+                if (preview.canceled || token->load(std::memory_order_relaxed)) return;
+                if (preview.ok) {
+                    scene = std::move(preview);
+                    frame.degraded_geometry = true;
+                    if (!frame.diagnostic.empty()) frame.diagnostic += "; ";
+                    frame.diagnostic +=
+                        "source '" + entry.first +
+                        "' shown as NON-VERIFIED PREVIEW: " + strict_diagnostic;
+                }
+            }
             if (!scene.ok) {
                 frame.ok = false;
                 frame.diagnostic = "source '" + entry.first + "': " + scene.diagnostic;

@@ -58,7 +58,11 @@ struct ProjectModelLoadResult final {
     [[nodiscard]] bool ok() const noexcept { return model != nullptr; }
 };
 
+// When refreshing the same project after isolated resource acquisition,
+// immutable canonical source identities may reuse their previously decoded
+// source::Result rather than decoding all countries again on the UI thread.
 [[nodiscard]] ProjectModelLoadResult load_project_model(
-    const storage::ProjectStore& project);
+    const storage::ProjectStore& project,
+    std::shared_ptr<const ProjectModel> previous_model = {});
 
 }  // namespace aeris::desktop

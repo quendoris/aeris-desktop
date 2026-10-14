@@ -166,7 +166,10 @@ namespace {
 
 }  // namespace
 
-ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) {
+ProjectModelLoadResult load_project_model(
+    const storage::ProjectStore& project,
+    std::shared_ptr<const ProjectModel> previous_model
+) {
     const storage::ProjectLayerListResult listed = storage::list_project_layers(project);
     if (!listed.ok()) {
         return {
@@ -194,7 +197,20 @@ ProjectModelLoadResult load_project_model(const storage::ProjectStore& project) 
         }
     }
 
+    // Source IDs in an AERIS project name immutable canonical source
+    // snapshots. Appending terrain or PNG resources cannot change those
+    // snapshots. Keep their already-verified in-memory representation when
+    // the source ID and physical .aeris path are unchanged.
+    const bool reuse_sources =
+        previous_model && previous_model->project_path == project.path();
     for (const std::string& source_id : source_ids) {
+        if (reuse_sources) {
+            const auto existing = previous_model->sources.find(source_id);
+            if (existing != previous_model->sources.end() && existing->second) {
+                model->sources.emplace(source_id, existing->second);
+                continue;
+            }
+        }
         project::DurableSourceLoadResult loaded =
             project::load_durable_source_result(project, source_id);
         if (!loaded.ok()) {
