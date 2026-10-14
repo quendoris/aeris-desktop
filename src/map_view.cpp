@@ -1016,6 +1016,16 @@ void MapView::paintEvent(QPaintEvent*) {
     }
 
     painter.resetTransform();
+    if (has_frame_ && frame_.degraded_geometry) {
+        // Keep this warning independent of the fatal-error surface: the
+        // displayed map is usable but must never be presented as verified.
+        painter.setPen(QColor(255, 188, 105));
+        painter.drawText(
+            QRect(22, 18, std::max(1, width() - 44), 34),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            QStringLiteral("Globe: NON-VERIFIED PREVIEW for unresolved geometry")
+        );
+    }
     if (busy_) {
         painter.setPen(QColor(183, 188, 195));
         painter.drawText(
