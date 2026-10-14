@@ -563,16 +563,44 @@ void MapView::set_project_model(
     std::shared_ptr<const ProjectModel> model,
     const std::uint64_t revision
 ) {
+    // A streamed elevation chunk changes only immutable resource bindings.
+    // Its arrival must not throw away verified country/globe geometry or
+    // re-read already decoded terrain tiles from the same durable .aeris.
+    const bool same_project =
+        model_ && model && model_->project_path == model->project_path;
+    bool same_canonical_sources =
+        same_project && model_->sources.size() == model->sources.size();
+    if (same_canonical_sources) {
+        for (const auto& entry : model_->sources) {
+            if (model->sources.find(entry.first) == model->sources.end()) {
+                same_canonical_sources = false;
+                break;
+            }
+        }
+    }
+
     if (terrain_refine_timer_ != nullptr) terrain_refine_timer_->stop();
     terrain_interaction_active_ = false;
-    elevation_detail_loader_.cancel();
+    if (!same_canonical_sources) {
+        elevation_detail_loader_.cancel();
+        elevation_surface_cache_ = {};
+        has_frame_ = false;
+        frame_error_.clear();
+    } else {
+        // Keep the bounded decoded tile LRU (resource IDs are immutable).
+        // Rebuild only the screen raster using the newly available bindings.
+        elevation_surface_cache_.model = nullptr;
+        elevation_surface_cache_.image = {};
+        elevation_surface_cache_.detail_pending_resources.clear();
+        elevation_surface_cache_.detail_failed_resources.clear();
+    }
+
     model_ = std::move(model);
     revision_ = revision;
-    has_frame_ = false;
-    frame_error_.clear();
-    elevation_surface_cache_ = {};
     update();
-    request_scene(view::SceneQuality::verified);
+    if (!same_canonical_sources || !has_frame_) {
+        request_scene(view::SceneQuality::verified);
+    }
     notify_viewport_data_demand();
 }
 
