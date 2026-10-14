@@ -110,6 +110,23 @@ int main(const int argc, char** argv) {
         return fail(8, "world import did not expand project to 6 layers / 3 sources / 0 eager resources");
     }
 
+    // Immutable canonical sources must survive a same-project model refresh
+    // without re-reading / reconstructing every world polygon on the GUI thread.
+    const auto reused_world = aeris::desktop::load_project_model(
+        *created.store, expanded.model
+    );
+    if (!reused_world.ok() ||
+        reused_world.model->sources.size() != expanded.model->sources.size()) {
+        return fail(40, "same-project canonical source reuse failed");
+    }
+    for (const auto& entry : expanded.model->sources) {
+        const auto same = reused_world.model->sources.find(entry.first);
+        if (same == reused_world.model->sources.end() ||
+            same->second != entry.second) {
+            return fail(41, "immutable source identity was decoded again on model refresh");
+        }
+    }
+
     const auto political = expanded.model->sources.find(std::string(kPoliticalSourceId));
     if (political == expanded.model->sources.end() || !political->second ||
         !political->second->feature_properties_complete) {
