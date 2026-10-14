@@ -8,6 +8,7 @@
 #include "aeris/view/surface.hpp"
 #include "aeris/view/surface_inverse.hpp"
 
+#include <QElapsedTimer>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -940,6 +941,11 @@ std::optional<SurfaceProbeResult> MapView::surface_probe_at(
 }
 
 void MapView::paintEvent(QPaintEvent*) {
+    // Opt-in diagnostic only. This is elapsed GUI paint time, NOT network
+    // latency, task execution time or a complete frame/present measurement.
+    const bool perf_hud = qEnvironmentVariableIsSet("AERIS_PERF_HUD");
+    QElapsedTimer paint_clock;
+    if (perf_hud) paint_clock.start();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), QColor(18, 21, 24));
@@ -1118,6 +1124,53 @@ void MapView::paintEvent(QPaintEvent*) {
                 .arg(QString::fromLatin1(view::surface_mode_name(mode_)))
                 .arg(zoom_, 0, 'f', 2)
         );
+    }
+
+    if (perf_hud) {
+        const double elapsed_ms =
+            static_cast<double>(paint_clock.nsecsElapsed()) / 1'000'000.0;
+        const std::size_t done =
+            elevation_surface_cache_.raster_samples_done;
+        const std::size_t total =
+            elevation_surface_cache_.raster_samples_used;
+
+        // Use device/screen pixels; the overlay must never participate in a
+        // geographic transform, source verification or canonical project data.
+        const QRect hud(
+            std::max(8, width() - 370),
+            56,
+            std::min(360, std::max(1, width() - 16)),
+            100
+        );
+        painter.save();
+        painter.resetTransform();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(12, 17, 23, 224));
+        painter.drawRoundedRect(hud, 7.0, 7.0);
+        painter.setPen(QColor(177, 245, 234));
+        painter.drawText(
+            hud.adjusted(10, 8, -10, -8),
+            Qt::AlignLeft | Qt::AlignTop,
+            QStringLiteral(
+                "AERIS diagnostic (paint only)\n"
+                "UI paint: %1 ms | terrain step: %2/%3\n"
+                "raster: %4/%5 | tiles: %6 | pending: %7"
+            )
+                .arg(elapsed_ms, 0, 'f', 2)
+                .arg(static_cast<qulonglong>(
+                    elevation_surface_cache_.raster_last_pass_samples
+                ))
+                .arg(static_cast<qulonglong>(kElevationRasterSamplesPerPaint))
+                .arg(static_cast<qulonglong>(done))
+                .arg(static_cast<qulonglong>(total))
+                .arg(static_cast<qulonglong>(
+                    elevation_surface_cache_.detail_tiles.size()
+                ))
+                .arg(static_cast<qulonglong>(
+                    elevation_surface_cache_.detail_pending_resources.size()
+                ))
+        );
+        painter.restore();
     }
 }
 
