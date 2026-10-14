@@ -24,6 +24,10 @@ struct RenderFrame final {
     view::SceneRequest request{};
     std::unordered_map<std::string, view::SceneGeometry> source_scenes;
     bool ok{true};
+    // Some sources can only be displayed as non-authoritative preview if
+    // their exact Globe fill fails strict convergence. This never changes
+    // the Core verifier's pass/fail result.
+    bool degraded_geometry{false};
     std::string diagnostic;
 };
 
